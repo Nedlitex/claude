@@ -247,6 +247,47 @@ This applies to all brain modifications including `/update-brain`, `/init-projec
 
 ---
 
+## Memory Promotion (Project → Global)
+
+Project-specific learnings (in `.tracking/MEMORY.md`, `.tracking/cannon/`, or `.tracking/tsg.md`) should be promoted to the global brain (`~/.claude/`) when they meet promotion criteria.
+
+### Promotion Criteria (any one triggers consideration)
+
+| Signal | Example |
+|--------|---------|
+| **Repeated across projects** | Same gotcha hit in 2+ projects |
+| **Generally applicable** | Pattern not tied to a specific codebase (e.g., "always check for null before accessing nested fields in GraphQL responses") |
+| **Tool/framework insight** | Discovery about how a widely-used tool behaves (e.g., "vitest `--run` flag skips watch mode") |
+| **Agent workflow improvement** | Better prompt pattern, delegation strategy, or coordination protocol |
+| **Debugging pattern** | Problem→cause→fix that applies beyond the current project |
+
+### Promotion Targets
+
+| Source | Destination | When |
+|--------|-------------|------|
+| Project MEMORY.md entry | Global `~/.claude/projects/*/memory/` or CLAUDE.md | Pattern is tool/framework-level, not project-specific |
+| Cannon finding | CLAUDE.md or agent definition | Validated insight improves agent behavior globally |
+| TSG entry | CLAUDE.md troubleshooting section or agent definition | Same fix applies across projects |
+| Agent workflow tweak | `~/.claude/agents/<agent>.md` | Improvement to how an agent operates, not project-specific |
+
+### Promotion Process
+
+1. **Detect** — During `/update-brain` or session wrap-up, flag entries that match promotion criteria
+2. **Validate** — Confirm the learning is general (not an artifact of one project's quirks)
+3. **Promote** — Write to the appropriate global location, citing the originating project for traceability
+4. **Deduplicate** — If the project entry is now fully captured globally, mark it in the project file as `[promoted to global]` rather than deleting (preserves local context)
+5. **Commit** — Follow Brain Version Control protocol (commit + push)
+
+### Auto-Detection Hints
+
+When reviewing project memories, watch for these phrases that suggest global applicability:
+- "This is the second/third time..."
+- "This applies to any project using X..."
+- "Learned that [tool/framework] always..."
+- "The real issue was [general concept], not [project-specific detail]"
+
+---
+
 ## Preferences
 
 - Be direct and concise. No filler, no throat-clearing.
