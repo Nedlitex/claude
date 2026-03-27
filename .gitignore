@@ -1,0 +1,21 @@
+# Claude Code runtime data — not part of the brain
+backups/
+cache/
+debug/
+file-history/
+ide/
+plugins/
+projects/
+shell-snapshots/
+statsig/
+telemetry/
+todos/
+
+# Session-specific files
+history.jsonl
+stats-cache.json
+mcp-needs-auth-cache.json
+
+# Local settings (machine-specific, not shared)
+settings.local.json
+.credentials.json
