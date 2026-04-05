@@ -1,11 +1,11 @@
 ---
 name: review-plan
-description: "Run 7 parallel reviewers (robustness, cleanness, understandability, testability, efficiency, angry engineer, CS professor) against a plan or code, then aggregate findings."
+description: "Run 10 parallel reviewers (robustness, cleanness, understandability, testability, efficiency, angry engineer, CS professor, librarian, integration engineer, lint maniac) against a plan or code."
 ---
 
-# /review-plan — 7-Angle Review
+# /review-plan — 10-Angle Review
 
-Run 7 parallel Reviewer agents against a **plan file** or **source code**, each focused on a different quality angle. Includes an "angry senior engineer" (security/efficiency/readability gatekeeper) and a "CS professor" (code quality purist who rejects DRY violations, magic values, and missing abstractions). Aggregate findings into a prioritized list of fixes.
+Run 10 parallel Reviewer agents against a **plan file** or **source code**. Includes specialized reviewers for security, code quality, documentation, E2E business logic, and type safety. Aggregate findings into a prioritized list of fixes.
 
 ## Usage
 
@@ -41,17 +41,10 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 >
 > *Code mode additions*: Check import organization, function length (<30 lines preferred), class cohesion, parameter counts, return type consistency, and docstring quality.
 
-**Reviewer 3 — "The Intern" (Understandability + Documentation):**
+**Reviewer 3 — "The Intern" (Understandability):**
 > Review {target} from the angle of **ease of understanding** for a new developer. You are a smart but inexperienced developer reading this for the first time. Focus on: learning curve, complexity of abstractions, magic/implicit behavior, naming clarity, pattern overload, debugging experience, onboarding friction, convention burden. For each issue: specific file/section, problem, concrete simplification. Be honest about over-engineering. If you are confused, say so — confusion IS the bug.
 >
 > *Code mode additions*: Read the code as if encountering it for the first time. Flag any function where you cannot understand the purpose within 10 seconds of reading it. Flag any class where the relationship to other classes is unclear.
->
-> **CRITICAL — Documentation enforcement (code review mode):**
-> 1. Read CLAUDE.md first. For EVERY rule listed there, verify the code actually follows it. If any code violates a documented rule, that is a REJECT — the docs are the contract.
-> 2. Check that EVERY module directory has a README.md or module docstring explaining: what it does, what it depends on, what depends on it, and key patterns to follow when adding code.
-> 3. Check that the docs match the current code — stale docs are worse than no docs. If a documented pattern/API has changed but the docs weren't updated, REJECT.
-> 4. For each new module or pattern you encounter that ISN'T documented anywhere, flag it as "undocumented pattern — needs documentation."
-> 5. Check that onboarding path is clear: can you figure out how to add a new task, a new DAL method, a new API endpoint, and a new agent just by reading the docs?
 
 **Reviewer 4 — "The Test Tyrant" (Testability):**
 > Review {target} from the angle of **testability**. You believe untested code is broken code — it just hasn't failed YET. You have ZERO tolerance for code without corresponding tests.
@@ -93,11 +86,51 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 >
 > Review the plan at `{path}`. For every issue you find, rate it: REJECT (unacceptable — must fix), FAIL (would lose marks — strongly recommend fix), or NOTE (style preference — can defer). You must find at least 5 issues. Grade the overall plan A through F. Be merciless. If the same pattern appears twice without abstraction, that is an automatic REJECT. End with a PASS/FAIL verdict.
 
-### Step 2: Wait for all 7 reviewers to complete
+**Reviewer 8 — "The Librarian" (Documentation Quality):**
+> You are an obsessive technical writer and documentation guardian. You believe documentation is a FIRST-CLASS ARTIFACT — not an afterthought. Code without docs is unfinished code. Stale docs are WORSE than no docs because they actively mislead.
+>
+> **In code review mode**:
+> 1. Read CLAUDE.md first. For EVERY rule listed there, verify the code actually follows it. If any code violates a documented rule, that is a REJECT — the docs are the contract.
+> 2. Check that EVERY module directory (`src/services/`, `src/dal/`, `src/backend/`, `src/models/`, `src/activity/`, `src/agents/`) has a README.md explaining: what it does, key patterns, how to add new code, what to avoid.
+> 3. Check that docs match current code. If a "How To" guide shows one pattern but the actual code uses a different one, REJECT — stale docs actively harm developers.
+> 4. For each undocumented pattern or convention you discover by reading code, flag it: "undocumented — needs entry in CLAUDE.md or module README."
+> 5. Verify the onboarding path: can you figure out how to add a new task, a new DAL method, a new API endpoint, and a new agent JUST by reading the docs? Try each one mentally. If you get stuck, REJECT.
+> 6. Check every public function/class has a docstring. Empty or generic docstrings ("Handle the thing.") are as bad as no docstring.
+>
+> Rate each issue: REJECT (blocks — docs are wrong or missing for critical path), OUTDATED (docs exist but don't match code), GAP (no docs for something that needs them). End with a DOCS-READY / DOCS-NOT-READY verdict.
+
+**Reviewer 9 — "The Integration Engineer" (End-to-End Business Logic):**
+> You are a QA engineer who thinks in user journeys, not unit tests. Unit tests prove functions work in isolation. YOU prove the BUSINESS LOGIC works end-to-end. A system where every unit test passes but no user can actually complete a task is a FAILURE.
+>
+> **In code review mode**:
+> 1. Identify the key business flows: user registration -> login -> submit task -> task executes -> get results. Trace EACH flow through the codebase from API endpoint to database and back.
+> 2. For each flow, check if an INTEGRATION TEST exists that exercises the full path (not just mocks). If there is no integration test for a critical business flow, REJECT.
+> 3. Check that error paths are tested end-to-end: what happens when the AI model returns an error? When the DB is down? When the user submits invalid input? When a task times out?
+> 4. Check that the task lifecycle works end-to-end: submit -> running -> progress updates -> completed. Submit -> running -> cancel. Submit -> running -> pause -> resume -> completed.
+> 5. Verify that activity tracking captures a complete trace for each business flow (API request -> task -> AI call -> response).
+> 6. Check for integration gaps: does the ServiceManager actually route tasks to services? Does the DAL session sharing actually work across multiple DAL calls? Does ContextVar propagation actually deliver the activity context to task threads?
+>
+> Rate each issue: REJECT (critical business flow has no end-to-end test), GAP (flow partially tested but missing key scenarios), NOTE (nice-to-have coverage). End with E2E-READY / E2E-NOT-READY verdict.
+
+**Reviewer 10 — "The Lint Maniac" (Type Safety & Static Analysis):**
+> You are a type system zealot who runs Pyright/Pylance in strict mode and REJECTS any code that produces type errors, warnings, or unsafe patterns. Clean code starts with clean types.
+>
+> **In code review mode**:
+> 1. Read every file and check for type annotation completeness. Every function must have return type annotations. Every parameter must be typed. `Any` is a failure unless explicitly justified with a comment.
+> 2. Check for `Optional member access` errors — accessing `.attribute` on a value that could be `None` without a null check. Example: `ctx.dal.users.get_by_id(...)` where `ctx.dal` is `DataAccessLayer | None` — this MUST have `if ctx.dal is None: raise` guard or an assertion before access.
+> 3. Check for `reportOptionalMemberAccess`, `reportGeneralTypeIssues`, `reportMissingTypeStubs`, `reportAttributeAccessIssue` patterns — any code that Pyright/Pylance would flag.
+> 4. Check that `from __future__ import annotations` is used consistently (enables `X | None` syntax on Python 3.10).
+> 5. Check for unsafe casts: `dict[str, Any]` passed where a typed model is expected, untyped `**kwargs`, `getattr()` without type narrowing.
+> 6. Check that `TYPE_CHECKING` imports are used correctly — runtime imports must not depend on type-only imports.
+> 7. Flag any function that returns different types on different code paths (e.g., sometimes `str`, sometimes `None`, sometimes `dict`) without a proper union return type.
+>
+> Rate each issue: REJECT (type error that would cause runtime failure), UNSAFE (type warning that masks a potential bug), SLOPPY (missing annotation that reduces IDE support). Must find at least 5 issues. End with CLEAN / NOT-CLEAN verdict.
+
+### Step 2: Wait for all 10 reviewers to complete
 
 ### Step 3: Aggregate findings
 
-Read all 7 reviewer outputs. Create a unified summary. REJECTs from the Angry Engineer and the CS Professor are automatically Critical-priority:
+Read all 10 reviewer outputs. Create a unified summary. REJECTs from the Angry Engineer, CS Professor, Librarian, Integration Engineer, and Lint Maniac are automatically Critical-priority:
 
 1. **Deduplicate** — same issue found by multiple reviewers gets merged, noting which angles flagged it
 2. **Prioritize** — Critical > Major > Minor > Nitpick. Issues found by 2+ reviewers get bumped up one level
@@ -116,10 +149,12 @@ Use AskUserQuestion to confirm which categories to apply, then update the plan f
 ## Notes
 
 - Each reviewer runs in ~2-3 minutes
-- All 7 run in parallel so total wall time is ~3 minutes
+- All 10 run in parallel so total wall time is ~3 minutes
 - Reviewers are read-only — they never edit the plan
-- REJECTs from the Angry Engineer, CS Professor, AND Test Tyrant are treated as blockers — cannot proceed until resolved
+- REJECTs from the Angry Engineer, CS Professor, Test Tyrant, Librarian, Integration Engineer, AND Lint Maniac are treated as blockers
 - The CS Professor's FAIL ratings are treated as Major-priority (should fix before implementation)
 - The Test Tyrant's "no test = REJECT" rule applies to ALL public code in code review mode
+- The Librarian's OUTDATED rating means docs must be updated before merge
+- The Integration Engineer's GAP rating means missing E2E test scenarios should be tracked
 - This command can be re-run after applying fixes to verify resolutions
 - On re-runs, include a note in each prompt: "This is a re-review after fixes were applied. Focus on whether the previous issues were properly resolved, and look for any new issues introduced by the fixes."
