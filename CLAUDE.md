@@ -103,7 +103,9 @@ Each project should maintain a `.tracking/` directory (bootstrap with `/init-pro
 
 1. If `.tracking/MEMORY.md` exists, read it for context, patterns, and prior decisions
 2. Check relevant tracking directory for in-progress work
-3. Read project CLAUDE.md for project-specific conventions
+3. Read project `CLAUDE.md` for project-specific conventions (build commands, architecture rules, code quality rules)
+4. Read `README.md` files in modules you'll modify (e.g., `src/admin/README.md`, `src/storage/README.md`)
+5. Check if a `.venv` exists — if so, ALL Python commands must use it (never system Python)
 
 ### During Work
 
@@ -145,6 +147,8 @@ Agent definition files contain only what differentiates that agent from others.
 | Escalate blockers, not preferences | Agents solve problems; humans decide policy |
 | Read before you write | Understand existing code before changing it |
 | Validate before returning | No unchecked work crosses agent boundaries |
+| **NEVER install to system Python** | Always use the project's `.venv`. Use `.venv/Scripts/pip` (Windows) or `.venv/bin/pip` (Unix) explicitly. Bare `pip install` goes to system and is FORBIDDEN. |
+| **Read project docs before coding** | Read `CLAUDE.md`, `README.md`, and module-level READMEs before making changes. These contain project-specific rules, conventions, and constraints that MUST be followed. |
 
 ---
 
