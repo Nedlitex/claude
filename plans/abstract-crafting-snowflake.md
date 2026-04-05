@@ -214,9 +214,22 @@ D:\edu\
 │   │   ├── test_registry.py
 │   │   ├── test_recovery.py           # Orphaned detection, staleness, max retries, cascade
 │   │   └── test_concurrent.py         # N tasks, no deadlock, no state corruption
-│   └── tools/
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   └── test_base_tool.py          # Registration, param validation, execution, error
+│   ├── utilities/
+│   │   ├── __init__.py
+│   │   ├── test_retry.py              # Policies, backoff, sleep_func injection, max retries
+│   │   ├── test_time.py               # Timezone-aware datetime helpers
+│   │   └── test_profile.py            # Execution tracing
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── test_mock_model.py         # Canned responses, call history, sequence behavior
+│   │   └── test_task_conversation.py  # Progress, cancel, resume, message threading
+│   └── service_management/
 │       ├── __init__.py
-│       └── test_base_tool.py          # Registration, param validation, execution, error
+│       ├── test_service_manager.py    # Backend selection, task routing, lifecycle
+│       └── test_local_backend.py      # In-process execution, thread management
 └── .tracking/
     └── plans/
 ```
@@ -314,7 +327,7 @@ class BaseTask(Generic[ConfigT]):
         self.subtasks = SubtaskManager(self)        # child task tracking
 ```
 
-Each component is independently testable (~50-100 lines each). Developers access capabilities via explicit delegation: `self.progress.report(30, "...")` not `self.report_progress(30, "...")`.
+Each component is independently testable (~50-100 lines each). Developers access capabilities via explicit delegation: `self.progress.report(30, "...")` not `self.progress.report(30, "...")`.
 
 ### 5. Lazy database initialization
 
@@ -347,7 +360,8 @@ class BaseTaskConfig(BaseModel):
 ```python
 ConfigT = TypeVar("ConfigT", bound=BaseTaskConfig)
 
-class BaseTask(Generic[ConfigT], DBTrackingMixin, ProfilingMixin, ModelAccessMixin, SubtaskMixin):
+class BaseTask(Generic[ConfigT]):
+    """Task with composed components — no mixin inheritance."""
     def __init__(
         self,
         task_config: ConfigT,
@@ -370,7 +384,7 @@ class ExamIngestTaskConfig(BaseTaskConfig):
     extract_images: bool = True
 
 class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
-    async def _run(self):
+    async def _execute(self) -> TaskResult:
         # Access typed config fields directly
         exam_id = self.config.exam_id
         file_id = self.config.user_file_id
@@ -508,13 +522,13 @@ class BaseTask(Generic[ConfigT], ...):
     _parent: Optional["BaseTask"] = None
 
     def _transition(self, new_state: TaskState):
-        """Thread-safe state transition with validation."""
+        """Thread-safe state transition with validation. No DB write — persist at flush points only."""
         with self._state_lock:
             if new_state not in TASK_TRANSITIONS[self._state]:
                 raise InvalidStateTransition(self._state, new_state)
             old_state = self._state
             self._state = new_state
-            self._persist_state()  # Write to DB if tracking enabled
+            # No _persist_state() here — persist only at checkpoint(), save_context(), terminal states
             logger.info(f"[{self.task_id}] {old_state} → {new_state}")
 
     @property
@@ -538,24 +552,29 @@ class BaseTask(Generic[ConfigT], ...):
 
     def cancel(self, reason: str = ""):
         """Cancel this task AND all its children (hierarchical)."""
-        self._transition(TaskState.CANCELLED)
-        self.result = reason or "Cancelled"
-        for child in self._children:
+        with self._state_lock:
+            self._transition(TaskState.CANCELLED)
+            self.result = reason or "Cancelled"
+            self._pause_event.set()  # Wake any paused checkpoint() wait
+            children = list(self._children)  # Snapshot under lock
+        for child in children:
             if child.state in (TaskState.RUNNING, TaskState.PAUSED, TaskState.PENDING):
                 child.cancel(reason=f"Parent {self.task_id} cancelled")
 
     def pause(self):
         """Pause this task AND all its children. Saves context for resume."""
-        self.save_context()  # Persist current progress
-        self._transition(TaskState.PAUSED)
-        for child in self._children:
+        self.tracking.save_context()
+        with self._state_lock:
+            self._transition(TaskState.PAUSED)
+            children = list(self._children)  # Snapshot under lock
+        for child in children:
             if child.state == TaskState.RUNNING:
                 child.pause()
 
     def resume(self):
         """Resume from PAUSED state. Loads saved context."""
         self._transition(TaskState.RUNNING)
-        context, stage = self.load_context()
+        context, stage = self.tracking.load_context()
         self._on_resume(context, stage)  # Hook for subclasses
         for child in self._children:
             if child.state == TaskState.PAUSED:
@@ -589,11 +608,16 @@ async def checkpoint(self):
         if self._pause_requested:
             self._pause_requested = False
             self._transition(TaskState.PAUSED)  # Under lock — atomic
-    # Wait OUTSIDE the lock — resume() can acquire it
+    # Wait OUTSIDE the lock — resume() and cancel() can acquire it
     if self._task._state == TaskState.PAUSED:
         await asyncio.get_event_loop().run_in_executor(None, self._pause_event.wait)
+        # Re-check state: may have been cancelled while paused
         with self._task._state_lock:
-            self._transition(TaskState.RUNNING)
+            if self._task._state == TaskState.CANCELLED:
+                raise TaskCancelled(self._task.task_id)
+            if self._task._state == TaskState.PAUSED:
+                self._transition(TaskState.RUNNING)
+            # else: already resumed by another path
 ```
 
 **Uniform lifecycle management — BaseTask owns ALL state transitions**:
@@ -1077,23 +1101,23 @@ async def submit_and_wait_subtask(self, service_name, task, weight=1.0, wait=Tru
 **Example — multi-stage task with weighted subtasks**:
 ```python
 class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
-    async def _run(self):
+    async def _execute(self) -> TaskResult:
         # Stage 1: Parse file (30% of total work)
         parse_task = ParseTask(config=..., service_name=SERVICE_PARSE)
         await self.submit_and_wait_subtask(SERVICE_PARSE, parse_task, weight=0.3)
         # Parent progress auto-updates as parse_task reports 0→100%
 
-        await self.checkpoint()
+        await self.lifecycle.checkpoint()
 
         # Stage 2: Extract problems (50% of total work)
         extract_task = ExamExtractTask(config=..., service_name=SERVICE_EXAM_EXTRACT)
         await self.submit_and_wait_subtask(SERVICE_EXAM_EXTRACT, extract_task, weight=0.5)
 
         # Stage 3: Own work (20% — no subtask)
-        self.report_progress(80, "Finalizing...")
+        self.progress.report(80, "Finalizing...")
         await self._finalize()
-        self.report_progress(100, "Done")
-        self.complete(result="Success")
+        self.progress.report(100, "Done")
+        return TaskResult(status=TaskResultStatus.SUCCESS, message="Done")
 ```
 
 The API endpoint can query a single task_id and get aggregated progress across the entire subtask tree, without needing to know about subtask structure.
@@ -1102,7 +1126,7 @@ The API endpoint can query a single task_id and get aggregated progress across t
 1. **Formal state enum** — no more boolean flags (`completed`, `cancelled`)
 2. **Validated transitions** — can't go from COMPLETED to RUNNING
 3. **Hierarchical propagation** — pause/cancel/resume cascade to all children
-4. **Cooperative checkpoints** — tasks opt-in to pause points via `await self.checkpoint()`
+4. **Cooperative checkpoints** — tasks opt-in to pause points via `await self.lifecycle.checkpoint()`
 5. **Stage-based resume** — `save_context(stage=N)` + `load_context()` in `_run()` enables pick-up-where-left-off
 6. **Server recovery** — on restart, orphaned RUNNING tasks are detected via stale heartbeats
 7. **Hierarchical progress** — parent progress auto-aggregates from weighted children, propagates up the tree
@@ -1166,7 +1190,7 @@ class TaskConversation:
             self.turn_count += 1
 
             # --- Cancellation check between turns ---
-            await self.task.checkpoint()
+            await self.task.lifecycle.checkpoint()
 
             # --- Safety limit ---
             if self.turn_count >= self.max_turns:
@@ -1174,7 +1198,7 @@ class TaskConversation:
 
             # --- Progress reporting ---
             tool_names = [tc.tool_name for tc in response.tool_calls]
-            self.task.report_progress(
+            self.task.progress.report(
                 self.task._progress,  # Don't change overall %, just update message
                 f"[{self.label}] Turn {self.turn_count}: calling {', '.join(tool_names)}"
             )
@@ -1241,8 +1265,8 @@ class TaskConversation:
 **Usage in a task**:
 ```python
 class ExamAnalysisTask(BaseTask[ExamAnalysisTaskConfig]):
-    async def _run(self):
-        context, stage = self.load_context()
+    async def _execute(self) -> TaskResult:
+        context, stage = self.tracking.load_context()
 
         if stage < 1:
             model = self.get_model_for_scenario(CONTENT_EXTRACTION)
@@ -1251,8 +1275,8 @@ class ExamAnalysisTask(BaseTask[ExamAnalysisTaskConfig]):
 
             result = await tc.run(user_prompt="Analyze this answer sheet...")
             # Conversation state saved as part of task context
-            self.save_context({"extraction": result, "conv_state": tc.snapshot().model_dump()}, task_stage=1)
-            await self.checkpoint()
+            self.tracking.save_context({"extraction": result, "conv_state": tc.snapshot().model_dump()}, task_stage=1)
+            await self.lifecycle.checkpoint()
 
         if stage < 2:
             # Stage 2 can resume the conversation if needed
@@ -1262,7 +1286,7 @@ class ExamAnalysisTask(BaseTask[ExamAnalysisTaskConfig]):
 ```
 
 **Key improvements**:
-1. **Cancellation between turns** — `await self.task.checkpoint()` after every tool-calling round; if task is cancelled/paused, the conversation stops cleanly
+1. **Cancellation between turns** — `await self.task.lifecycle.checkpoint()` after every tool-calling round; if task is cancelled/paused, the conversation stops cleanly
 2. **Progress visibility** — each model turn updates the task's message with tool names being called
 3. **Recovery** — `snapshot()` / `from_snapshot()` lets a paused/failed task resume a multi-turn conversation from where it left off
 4. **Token tracking** — per-conversation input/output token counts, aggregated at the task level
@@ -1343,7 +1367,7 @@ async def retry_async(
                 on_retry(attempt, e, delay)
             # Check task cancellation before sleeping
             if task:
-                await task.checkpoint()
+                await task.lifecycle.checkpoint()
             await asyncio.sleep(delay)
     raise last_error  # Should not reach here, but safety net
 ```
@@ -1365,7 +1389,7 @@ class TaskConversation:
             tools=self.conversation.tools,
             policy=self.retry_policy,
             task=self.task,
-            on_retry=lambda attempt, e, delay: self.task.report_progress(
+            on_retry=lambda attempt, e, delay: self.task.progress.report(
                 self.task._progress,
                 f"[{self.label}] Retrying model call ({attempt+1}/{self.retry_policy.max_retries}): {e}"
             ),
@@ -1389,7 +1413,7 @@ class BaseTask:
             func, *args,
             policy=policy,
             task=self,
-            on_retry=lambda attempt, e, delay: self.report_progress(
+            on_retry=lambda attempt, e, delay: self.progress.report(
                 self._progress,
                 f"[{label}] Retry {attempt+1}: {e}"
             ),
@@ -1400,7 +1424,7 @@ class BaseTask:
 **Usage in concrete tasks**:
 ```python
 class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
-    async def _run(self):
+    async def _execute(self) -> TaskResult:
         # AI call — automatically retries on rate limit / timeout
         model = self.get_model_for_scenario(CONTENT_EXTRACTION)
         conv = model.create_conversation(system_prompt="...", tools=[...])
@@ -1425,7 +1449,7 @@ class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
 **Key features**:
 1. **Generic** — `retry_async()` works with any async function, not just AI calls
 2. **Policy-based** — pre-built policies for common scenarios (AI, external API, DB); tasks can customize
-3. **Task-integrated** — checks `task.checkpoint()` between retries (cancellation-aware)
+3. **Task-integrated** — checks `task.lifecycle.checkpoint()` between retries (cancellation-aware)
 4. **Progress-aware** — retry attempts show in task progress messages
 5. **Exponential backoff + jitter** — prevents thundering herd on shared APIs
 6. **Composable** — `TaskConversation` uses it internally, tasks use `run_with_retry()` for anything else
@@ -1860,7 +1884,7 @@ from i18n import t
 raise HTTPException(status_code=401, detail=t("auth.invalid_credentials"))
 
 # In tasks
-self.report_progress(30, t("task.progress.parsing_file"))
+self.progress.report(30, t("task.progress.parsing_file"))
 return TaskResult(
     status=TaskResultStatus.SUCCESS,
     message=t("task.progress.extracted", count=len(problems)),
@@ -2218,13 +2242,13 @@ async def get_user(user_id: int, dal: DataAccessLayer = Depends(get_dal)):
 
 # In service/task
 class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
-    async def _run(self):
+    async def _execute(self) -> TaskResult:
         dal = get_dal()
         exam = dal.exams.get_exam_with_problems(self.config.exam_id)
         ...
 
 # In BaseTask (replaces the layering violation of importing from backend/apis/tasks.py)
-class DBTrackingMixin:
+class DBTracker:
     def _persist_state(self):
         dal = get_dal()
         dal.tasks.update_state(self.task_id, self.state.value)
@@ -2537,7 +2561,7 @@ def _run_wrapper(self):
         )
         self._timeout_timer.start()
     try:
-        result = loop.run_until_complete(self._execute(context, stage))
+        result = loop.run_until_complete(self._execute())
     finally:
         if self._timeout_timer:
             self._timeout_timer.cancel()
@@ -2553,7 +2577,7 @@ class ExamIngestResultData(BaseModel):
     skipped_problems: list[str] = []
 
 class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
-    async def _execute(self, context, stage) -> TaskResult:
+    async def _execute(self) -> TaskResult:
         ...
         return TaskResult(
             status=TaskResultStatus.SUCCESS,
@@ -2858,12 +2882,12 @@ Task._execute()
         └── TaskConversation.run()
               └── model.handle_chat_completion_request_async()  ← actual AI call
                     ↕ (between tool-calling turns)
-              └── task.checkpoint()  ← checks for pause/cancel
+              └── task.lifecycle.checkpoint()  ← checks for pause/cancel
                     ↕ (if paused)
               └── TaskConversation saves state → agent._save_state() → task.save_context()
 
 On recovery:
-Task._execute(context, stage)
+Task._execute()
   └── agent.run()  ← checks context for saved agent state
         ├── If completed → returns cached result (skip AI call entirely)
         └── If running → reconstructs conversation from snapshot, resumes
@@ -2872,7 +2896,7 @@ Task._execute(context, stage)
 **Multi-agent task example — each agent stage is independently recoverable**:
 ```python
 class ExamFullAnalysisTask(BaseTask[ExamFullAnalysisTaskConfig]):
-    async def _execute(self, context, stage) -> TaskResult:
+    async def _execute(self) -> TaskResult:
         dal = get_context().dal
         answer_sheet = dal.exams.get_answer_sheet(self.config.answer_sheet_id)
 
@@ -2882,8 +2906,8 @@ class ExamFullAnalysisTask(BaseTask[ExamFullAnalysisTaskConfig]):
             user_prompt=f"Extract answers from: {answer_sheet.content}",
             prompt_vars={"exam_name": answer_sheet.exam_name},
         )
-        self.report_progress(33, t("task.progress.extracted_answers"))
-        await self.checkpoint()
+        self.progress.report(33, t("task.progress.extracted_answers"))
+        await self.lifecycle.checkpoint()
 
         # Agent 2: Grade answers
         grade_agent = GradeAnswerAgent(task=self, agent_name="grade")
@@ -2891,15 +2915,15 @@ class ExamFullAnalysisTask(BaseTask[ExamFullAnalysisTaskConfig]):
             user_prompt=f"Grade these answers: {extraction.model_dump_json()}",
             prompt_vars={"rubric": answer_sheet.rubric},
         )
-        self.report_progress(66, t("task.progress.graded"))
-        await self.checkpoint()
+        self.progress.report(66, t("task.progress.graded"))
+        await self.lifecycle.checkpoint()
 
         # Agent 3: Generate feedback
         feedback_agent = GenerateFeedbackAgent(task=self, agent_name="feedback")
         feedback = await feedback_agent.run(
             user_prompt=f"Generate feedback: {grading.model_dump_json()}",
         )
-        self.report_progress(100, t("task.progress.complete"))
+        self.progress.report(100, t("task.progress.complete"))
 
         return TaskResult(
             status=TaskResultStatus.SUCCESS,
@@ -2935,7 +2959,7 @@ class AnalyzeAnswerAgent(BaseAgent[AnswerAnalysisResult]):
 **Usage in tasks — clean and readable**:
 ```python
 class ExamAnswerAnalysisTask(BaseTask[ExamAnswerAnalysisTaskConfig]):
-    async def _execute(self, context, stage) -> TaskResult:
+    async def _execute(self) -> TaskResult:
         dal = get_context().dal
         answer_sheet = dal.exams.get_answer_sheet(self.config.answer_sheet_id)
 
@@ -3023,9 +3047,9 @@ A central rule: **no single file should grow large enough to become hard to read
 - `config/`, `exceptions.py`, `i18n/` are leaf modules — no app imports allowed
 
 ### Task Implementation Rules
-- Concrete tasks ONLY implement `_execute(context, stage) -> TaskResult`
+- Concrete tasks ONLY implement `_execute() -> TaskResult`
 - NEVER call complete(), fail(), cancel() directly — return TaskResult instead
-- ALWAYS call `await self.checkpoint()` between stages
+- ALWAYS call `await self.lifecycle.checkpoint()` between stages
 - ALWAYS use `TaskConversation` for AI model calls within tasks
 - ALWAYS use `self.run_with_retry()` for external API calls
 
@@ -3247,7 +3271,7 @@ class ActivityContext(BaseModel):
     total_duration_ms: float = 0
 
     # All spans in this activity (flat list, parent_span_id for nesting)
-    spans: list[ActivitySpan] = []
+    spans: dict[int, ActivitySpan] = {}  # Thread-safe: protected by lock
     _next_span_id: int = 0
     _current_span_id: int | None = None  # Active span for auto-nesting
 
@@ -3263,7 +3287,7 @@ class ActivityContext(BaseModel):
             parent_span_id=self._current_span_id,
             metadata=metadata,
         )
-        self.spans.append(span)
+        self.spans[span_id] = span
         self._current_span_id = span_id
         return span_id
 
@@ -3862,7 +3886,7 @@ Five parallel reviews (robustness, cleanness, understandability, testability, ef
            self.tracking = DBTracker(self)             # DB persistence
            self.profiler = Profiler(self)              # execution profiling
    ```
-   Concrete tasks use `self.progress.report(30, "...")` not `self.report_progress(30, "...")`. Each component is independently testable and discoverable. No MRO confusion.
+   Concrete tasks use `self.progress.report(30, "...")` not `self.progress.report(30, "...")`. Each component is independently testable and discoverable. No MRO confusion.
 
 8. **DAL transaction support** — Add `dal.transaction()` for multi-step atomic operations:
    ```python
@@ -3900,7 +3924,7 @@ Five parallel reviews (robustness, cleanness, understandability, testability, ef
     ```python
     # Simplest possible task — no recovery, no agents, no subtasks
     class GreetTask(BaseTask[BaseTaskConfig]):
-        async def _execute(self, context, stage) -> TaskResult:
+        async def _execute(self) -> TaskResult:
             return TaskResult(status=TaskResultStatus.SUCCESS, message="Hello!")
     ```
 
