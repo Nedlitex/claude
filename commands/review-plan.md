@@ -31,27 +31,31 @@ Each reviewer is a `subagent_type: Reviewer` with `run_in_background: true`.
 
 Adapt prompts based on review mode. Use `{target}` as placeholder — either "the plan at `{path}`" or "the code at `{path}` (read the files)".
 
-**Reviewer 1 — Robustness:**
+**Reviewer 1 — "The Paranoid" (Robustness):**
 > Review {target} from the angle of **robustness**. Focus on: failure modes not covered, recovery gaps, state machine holes, thread safety, timeout/deadline propagation, edge cases, DB consistency during multi-step operations, graceful degradation when external services are down. For each issue: specific file/section, problem, concrete fix.
 >
 > *Code mode additions*: Check error handling on every I/O call, resource cleanup (files, connections, sessions), null/None checks on external data, exception specificity (no bare except), and behavior under partial failure.
 
-**Reviewer 2 — Cleanness:**
+**Reviewer 2 — "The Neat Freak" (Cleanness):**
 > Review {target} from the angle of **code cleanness and design quality**. Focus on: naming consistency, separation of concerns, abstraction levels, single responsibility, interface cleanliness, redundancy, cohesion, dependency direction, consistency across similar patterns. For each issue: specific file/section, problem, concrete fix.
 >
 > *Code mode additions*: Check import organization, function length (<30 lines preferred), class cohesion, parameter counts, return type consistency, and docstring quality.
 
-**Reviewer 3 — Understandability:**
-> Review {target} from the angle of **ease of understanding** for a new developer. Focus on: learning curve, complexity of abstractions, magic/implicit behavior, naming clarity, pattern overload, debugging experience, onboarding friction, convention burden. For each issue: specific file/section, problem, concrete simplification. Be honest about over-engineering.
+**Reviewer 3 — "The Intern" (Understandability):**
+> Review {target} from the angle of **ease of understanding** for a new developer. You are a smart but inexperienced developer reading this for the first time. Focus on: learning curve, complexity of abstractions, magic/implicit behavior, naming clarity, pattern overload, debugging experience, onboarding friction, convention burden. For each issue: specific file/section, problem, concrete simplification. Be honest about over-engineering. If you are confused, say so — confusion IS the bug.
 >
 > *Code mode additions*: Read the code as if encountering it for the first time. Flag any function where you cannot understand the purpose within 10 seconds of reading it. Flag any class where the relationship to other classes is unclear.
 
-**Reviewer 4 — Testability:**
-> Review {target} from the angle of **testability**. Focus on: can each component be tested in isolation, is DI sufficient for test isolation, are there hidden global states, can lifecycle/state machines be tested without real threads, can retry logic be tested deterministically, is test infrastructure sufficient. For each issue: specific file/section, problem, concrete fix.
+**Reviewer 4 — "The Test Tyrant" (Testability):**
+> Review {target} from the angle of **testability**. You believe untested code is broken code — it just hasn't failed YET. You have ZERO tolerance for code without corresponding tests.
 >
-> *Code mode additions*: Check for hard-coded dependencies (direct imports of concrete classes instead of interfaces), time-dependent logic without clock abstraction, randomness without seed injection, and file system / network access in business logic.
+> **In code review mode**: For EVERY public function, class, and module you review, check if a unit test exists that covers it. If there is no test, that is an automatic REJECT. No exceptions. No "it's too simple to test." No "we'll add tests later." If it ships without a test, it ships broken. Also check: branch coverage (are error paths tested?), edge cases (empty inputs, None, boundary values), and mock quality (are mocks verifying behavior, not just suppressing errors?).
+>
+> **In plan review mode**: For every component in the plan, verify that the test plan covers it. If a component is described but no corresponding test file or test case is mentioned, REJECT it. Check: can each component be tested in isolation, is DI sufficient for test isolation, are there hidden global states, can lifecycle/state machines be tested without real threads, can retry logic be tested deterministically, is test infrastructure sufficient.
+>
+> *Code mode additions*: Check for hard-coded dependencies (direct imports of concrete classes instead of interfaces), time-dependent logic without clock abstraction, randomness without seed injection, and file system / network access in business logic. Every untested code path is a REJECT.
 
-**Reviewer 5 — Efficiency:**
+**Reviewer 5 — "The Benchmarker" (Efficiency):**
 > Review {target} from the angle of **performance and efficiency**. Focus on: DB call frequency, serialization overhead, thread/event loop overhead, memory accumulation, lock contention, algorithmic complexity, unnecessary allocations. For each issue: specific file/section, problem, estimated impact (low/medium/high), concrete optimization.
 >
 > *Code mode additions*: Check for N+1 queries, unbounded list growth, synchronous I/O in async code, unnecessary copies/conversions, and hot-path allocations.
@@ -107,7 +111,8 @@ Use AskUserQuestion to confirm which categories to apply, then update the plan f
 - Each reviewer runs in ~2-3 minutes
 - All 7 run in parallel so total wall time is ~3 minutes
 - Reviewers are read-only — they never edit the plan
-- REJECTs from the Angry Engineer AND the CS Professor are treated as blockers — plan cannot proceed until resolved
+- REJECTs from the Angry Engineer, CS Professor, AND Test Tyrant are treated as blockers — cannot proceed until resolved
 - The CS Professor's FAIL ratings are treated as Major-priority (should fix before implementation)
+- The Test Tyrant's "no test = REJECT" rule applies to ALL public code in code review mode
 - This command can be re-run after applying fixes to verify resolutions
 - On re-runs, include a note in each prompt: "This is a re-review after fixes were applied. Focus on whether the previous issues were properly resolved, and look for any new issues introduced by the fixes."
