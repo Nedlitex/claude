@@ -563,10 +563,11 @@ class BaseTask(Generic[ConfigT], ...):
 
     def pause(self):
         """Pause this task AND all its children. Saves context for resume."""
-        self.tracking.save_context()
         with self._state_lock:
+            self._pause_event.clear()  # Reset for this pause cycle
             self._transition(TaskState.PAUSED)
             children = list(self._children)  # Snapshot under lock
+        self.tracking.save_context()  # Save AFTER confirmed pause (not before)
         for child in children:
             if child.state == TaskState.RUNNING:
                 child.pause()
@@ -745,10 +746,13 @@ class LongRunningIngestTask(BaseTask[ExamIngestTaskConfig]):
         if stage < 2:
             parsed = context.get("parsed_data", None) or await self._parse_file()
             problems = await self._extract_problems(parsed)
-            self.tracking.save_context({"problem_count": len(problems)}, task_stage=2)
+            self.tracking.save_context({"problems": problems, "problem_count": len(problems)}, task_stage=2)
             self.progress.report(70, t("task.progress.extracted", count=len(problems)))
             await self.lifecycle.checkpoint()
 
+        # Stage 3: Save to DB (load problems from context if recovering at stage >= 2)
+        if stage >= 2:
+            problems = context.get("problems", [])
         dal.exams.save_problems(self.config.exam_id, problems)
         return TaskResult(status=TaskResultStatus.SUCCESS, message="Done")
 ```
@@ -1090,9 +1094,10 @@ class BaseTask(Generic[ConfigT], ...):
 ```python
 async def submit_and_wait_subtask(self, service_name, task, weight=1.0, wait=True):
     task._parent = self
-    self._children.append(task)
-    self._child_weights[task.task_id] = weight
-    task_id = await manager.submit_task(service_name, task, ...)
+    with self._state_lock:
+        self._children.append(task)
+    task_id = await manager.submit_task(service_name, task, ...)  # task_id assigned here
+    self._child_weights[task_id] = weight  # Key on real ID, not None
     if wait:
         await manager.wait_for_task(task_id)
     return task_id
