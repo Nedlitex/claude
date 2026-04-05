@@ -163,31 +163,60 @@ D:\edu\
 ├── tests/
 │   ├── conftest.py                    # Shared fixtures, mock setup, override_context
 │   ├── factories.py                   # Test factories: make_agent_state, make_task_context, etc.
+│   ├── test_architecture.py           # Import boundaries, no bare except, file size limits
+│   ├── activity/
+│   │   ├── __init__.py
+│   │   ├── test_context.py            # Span creation, nesting, thread-safety
+│   │   ├── test_throttle.py           # Rate limit, cache expiry, policy enforcement
+│   │   └── test_middleware.py         # Activity creation, persistence, exclusion, 429
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   └── test_base_agent.py         # Agent lifecycle, caching, resume
 │   ├── backend/
 │   │   ├── __init__.py
 │   │   ├── apis/
 │   │   │   ├── __init__.py
-│   │   │   └── test_authentication.py
+│   │   │   ├── test_authentication.py
+│   │   │   ├── test_tasks.py          # Submit, status, cancel, pause, resume, retry
+│   │   │   └── test_file.py           # Upload, validation, auth
 │   │   └── test_base_server.py
+│   ├── config/
+│   │   ├── __init__.py
+│   │   └── test_settings.py           # Defaults, env override, nested delimiter, validation
 │   ├── dal/
 │   │   ├── __init__.py
 │   │   ├── test_user_dal.py
 │   │   ├── test_exam_dal.py
-│   │   └── test_task_dal.py
-│   ├── services/
+│   │   ├── test_task_dal.py
+│   │   ├── test_conversation_dal.py
+│   │   ├── test_file_dal.py
+│   │   ├── test_service_config_dal.py
+│   │   └── test_activity_dal.py
+│   ├── i18n/
 │   │   ├── __init__.py
-│   │   ├── test_base_service.py
-│   │   ├── test_base_task.py
-│   │   ├── test_registry.py
-│   │   ├── test_recovery.py           # TaskRecoveryManager tests
-│   │   └── test_concurrent.py         # Concurrent task submission tests
-│   ├── agents/
-│   │   ├── __init__.py
-│   │   └── test_base_agent.py         # Agent lifecycle, caching, resume
+│   │   └── test_i18n.py               # Locale fallback, interpolation, ContextVar isolation
 │   ├── model_management/
 │   │   ├── __init__.py
 │   │   └── test_model_manager.py
-│   └── test_architecture.py          # Architecture boundary tests
+│   ├── prompts/
+│   │   ├── __init__.py
+│   │   └── test_prompt_loader.py      # Render, missing var, include, StrictUndefined
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── components/
+│   │   │   ├── __init__.py
+│   │   │   ├── test_lifecycle.py      # All transitions, invalid transitions, thread-safe
+│   │   │   ├── test_progress.py       # Leaf, weighted children, parent aggregation
+│   │   │   ├── test_db_tracker.py     # Persist, heartbeat, debounce
+│   │   │   └── test_subtask.py        # Parent-child linking, weight assignment
+│   │   ├── test_base_service.py
+│   │   ├── test_base_task.py
+│   │   ├── test_registry.py
+│   │   ├── test_recovery.py           # Orphaned detection, staleness, max retries, cascade
+│   │   └── test_concurrent.py         # N tasks, no deadlock, no state corruption
+│   └── tools/
+│       ├── __init__.py
+│       └── test_base_tool.py          # Registration, param validation, execution, error
 └── .tracking/
     └── plans/
 ```
@@ -211,9 +240,9 @@ class DatabaseConfig(BaseModel):
     sqlite_file_directory: str = "src/data/"
 
 class AuthConfig(BaseModel):
-    secret_key: str = "changeme"
+    secret_key: str  # REQUIRED — no default. Server won't start without this.
     algorithm: str = "HS256"
-    expire_minutes: int = 10080
+    expire_minutes: int = Field(default=7 * 24 * 60, description="Token expiry (default: 7 days)")
 
 class AIConfig(BaseModel):
     openai_api_key: str = ""
@@ -270,17 +299,22 @@ class ExamIngestService(BaseService): ...
 
 `ServiceManager.__init__` reads from registry instead of hardcoding.
 
-### 4. BaseTask decomposition: Mixins separate concerns
+### 4. BaseTask decomposition: Composed components
 
 **Source**: `BaseTask` in `base_service.py` — 700+ lines mixing lifecycle, DB tracking, profiling, model access, subtask submission.
 
-**New**: Split into `base_task.py` + `mixins/`:
-- `DBTrackingMixin`: heartbeat, progress reporting, context save/load, DB state updates
-- `ProfilingMixin`: `begin_profiling_trace_phase()`, `end_profiling_trace_phase()`
-- `ModelAccessMixin`: `get_model_for_scenario()` with task-level overrides
-- `SubtaskMixin`: `submit_and_wait_subtask()`, `validate_file()`
+**New**: Split into `base_task.py` + `components/` directory. Components are **owned objects** (composition), NOT mixins (no multiple inheritance):
+```python
+class BaseTask(Generic[ConfigT]):
+    def __init__(self, config: ConfigT, service_name: str, ...):
+        self.lifecycle = LifecycleManager(self)    # state machine, pause/resume/cancel
+        self.progress = ProgressTracker(self)       # hierarchical progress reporting
+        self.tracking = DBTracker(self)             # DB persistence, context, heartbeat
+        self.profiler = Profiler(self)              # execution tracing
+        self.subtasks = SubtaskManager(self)        # child task tracking
+```
 
-`BaseTask` composes all mixins. Each is independently testable (~50-100 lines each).
+Each component is independently testable (~50-100 lines each). Developers access capabilities via explicit delegation: `self.progress.report(30, "...")` not `self.report_progress(30, "...")`.
 
 ### 5. Lazy database initialization
 
@@ -456,7 +490,7 @@ class TaskState(str, Enum):
 # Valid transitions
 TASK_TRANSITIONS = {
     TaskState.PENDING:   {TaskState.RUNNING, TaskState.CANCELLED},
-    TaskState.RUNNING:   {TaskState.PAUSED, TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.TIMED_OUT},
+    TaskState.RUNNING:   {TaskState.PAUSED, TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELLED, TaskState.TIMED_OUT, TaskState.PENDING},  # PENDING = recovery only
     TaskState.PAUSED:    {TaskState.RUNNING, TaskState.CANCELLED},
     TaskState.COMPLETED: set(),  # Terminal
     TaskState.FAILED:    {TaskState.PENDING},  # Can retry → back to PENDING
@@ -469,7 +503,7 @@ TASK_TRANSITIONS = {
 ```python
 class BaseTask(Generic[ConfigT], ...):
     _state: TaskState = TaskState.PENDING
-    _state_lock: threading.Lock
+    _state_lock: threading.RLock
     _children: list["BaseTask"]  # Tracked subtasks
     _parent: Optional["BaseTask"] = None
 
@@ -544,18 +578,22 @@ async def submit_and_wait_subtask(self, service_name, task, wait=True):
     return task_id
 ```
 
-**Cooperative pause via checkpoint**:
+**Cooperative pause via checkpoint** (in `LifecycleManager`):
 ```python
-# Tasks call this periodically in their _run() method
 async def checkpoint(self):
-    """Check if task should pause/cancel. Call between stages of work."""
-    if self._state == TaskState.CANCELLED:
-        raise TaskCancelled(self.task_id)
-    if self._pause_requested:
-        self.save_context()
-        self._transition(TaskState.PAUSED)
-        await self._pause_event.wait()  # Block until resumed
-        self._transition(TaskState.RUNNING)
+    """Check if task should pause/cancel. Call between stages of work.
+    Deadlock-safe: lock is NOT held during the pause wait."""
+    with self._task._state_lock:
+        if self._task._state == TaskState.CANCELLED:
+            raise TaskCancelled(self._task.task_id)
+        if self._pause_requested:
+            self._pause_requested = False
+            self._transition(TaskState.PAUSED)  # Under lock — atomic
+    # Wait OUTSIDE the lock — resume() can acquire it
+    if self._task._state == TaskState.PAUSED:
+        await asyncio.get_event_loop().run_in_executor(None, self._pause_event.wait)
+        with self._task._state_lock:
+            self._transition(TaskState.RUNNING)
 ```
 
 **Uniform lifecycle management — BaseTask owns ALL state transitions**:
@@ -578,111 +616,117 @@ class TaskResult:
     message: str = ""                    # Human-readable description
     data: dict | None = None             # Optional structured result data
     error: Exception | None = None       # Original exception if failed
-    metrics: dict | None = None          # Token usage, duration, etc.
+    metrics: TaskMetrics | None = None    # Typed: duration, tokens, retries
 
 class BaseTask(Generic[ConfigT], ...):
     result: TaskResult | None = None
 
     # --- This is what BaseTask manages uniformly ---
+    # NOTE: Worker threads MUST use contextvars.copy_context().run(task._run_wrapper)
+    # to propagate ActivityContext and locale. See BaseService dispatch.
+
+    async def run_async(self):
+        """Testable entry point — runs lifecycle within an existing event loop."""
+        self.lifecycle._transition(TaskState.RUNNING)
+        self.progress.report(0, t("task.progress.starting"))
+        try:
+            result = await asyncio.wait_for(
+                self._execute(),
+                timeout=self.task_timeout_seconds,  # Enforced by asyncio, not threading.Timer
+            )
+            self.result = result
+            if result.status in (TaskResultStatus.SUCCESS, TaskResultStatus.PARTIAL_SUCCESS):
+                self.lifecycle._transition(TaskState.COMPLETED)
+            else:
+                self.lifecycle._transition(TaskState.FAILED)
+        except asyncio.TimeoutError:
+            self.result = TaskResult(status=TaskResultStatus.TIMED_OUT, message=t("task.result.timed_out"))
+            self.lifecycle._transition(TaskState.TIMED_OUT)
+        except TaskCancelled:
+            self.result = TaskResult(status=TaskResultStatus.CANCELLED, message=t("task.result.cancelled"))
+            self.lifecycle._transition(TaskState.CANCELLED)
+        except Exception as e:
+            logger.exception(f"Task {self.task_id} failed with unhandled exception")
+            self.result = TaskResult(status=TaskResultStatus.FAILED, message=str(e), error=e)
+            self.lifecycle._transition(TaskState.FAILED)
+        finally:
+            self.tracking.persist_final_state(self.result)
+
     def _run_wrapper(self):
-        """Base class owns the ENTIRE lifecycle. Concrete tasks never touch state."""
+        """Thread entry point. Creates event loop, delegates to run_async()."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            self._transition(TaskState.RUNNING)
-            self.report_progress(0, "Starting...")
-
-            # Load context for potential resume
-            context, stage = self.load_context()
-
-            # Run the concrete task's logic
-            result = loop.run_until_complete(self._execute(context, stage))
-
-            # Concrete task returns TaskResult — base handles the transition
-            self.result = result
-            if result.status == TaskResultStatus.SUCCESS:
-                self._transition(TaskState.COMPLETED)
-            elif result.status == TaskResultStatus.PARTIAL_SUCCESS:
-                self._transition(TaskState.COMPLETED)
-            else:
-                self._transition(TaskState.FAILED)
-
-        except TaskCancelled:
-            self.result = TaskResult(status=TaskResultStatus.CANCELLED, message="Task cancelled")
-            self._transition(TaskState.CANCELLED)
-
-        except TaskTimedOut:
-            self.result = TaskResult(status=TaskResultStatus.TIMED_OUT, message="Task timed out")
-            self._transition(TaskState.TIMED_OUT)
-
-        except Exception as e:
-            logger.exception(f"Task {self.task_id} failed with unhandled exception")
-            self.result = TaskResult(
-                status=TaskResultStatus.FAILED,
-                message=str(e),
-                error=e,
-            )
-            self._transition(TaskState.FAILED)
-
+            loop.run_until_complete(self.run_async())
         finally:
-            self._persist_state()
-            self._persist_result()
             loop.close()
             asyncio.set_event_loop(None)
 
+    # Architectural choice: Each task gets its own event loop in its own thread.
+    # This prevents one task's async errors from crashing others, at the cost of
+    # not sharing async connection pools. For scale, consider a shared event loop
+    # with asyncio.run_coroutine_threadsafe().
+
     # --- This is ALL a concrete task implements ---
     @abstractmethod
-    async def _execute(self, context: dict | None, stage: int) -> TaskResult:
+    async def _execute(self) -> TaskResult:
         """
         Implement task-specific logic. Return a TaskResult.
 
-        Args:
-            context: Saved context from a previous run (None if fresh start)
-            stage: Last completed stage (0 if fresh start)
-
-        Returns:
-            TaskResult with status and optional data/message
-
         Rules:
-            - Do NOT call complete(), fail(), cancel() — base class handles that
-            - DO call self.checkpoint() between stages for pause/cancel support
-            - DO call self.save_context() to enable recovery
-            - DO call self.report_progress() for visibility
-            - Return TaskResult to indicate outcome
+            - Return TaskResult to indicate outcome (never call _complete/_fail/_cancel)
+            - Use self.progress.report() for visibility
+            - Use self.lifecycle.checkpoint() between stages for pause/cancel
+            - For recovery: call self.tracking.load_context() at the top
+            - Use self.tracking.save_context() to enable crash recovery
         """
         raise NotImplementedError
 ```
 
-**Concrete task example — clean and focused**:
+**Concrete task example — simple (no recovery)**:
 ```python
 class ExamIngestTask(BaseTask[ExamIngestTaskConfig]):
-    async def _execute(self, context: dict | None, stage: int) -> TaskResult:
-        dal = get_dal()
+    async def _execute(self) -> TaskResult:
+        dal = get_context().dal
+        parsed = await self._parse_file()
+        self.progress.report(30, t("task.progress.parsing_file"))
 
-        if stage < 1:
-            # Stage 1: Parse file
-            parsed = await self._parse_file()
-            self.save_context({"parsed_data": parsed}, task_stage=1)
-            self.report_progress(30, "File parsed")
-            await self.checkpoint()
+        problems = await self._extract_problems(parsed)
+        self.progress.report(70, t("task.progress.extracted", count=len(problems)))
+        await self.lifecycle.checkpoint()
 
-        if stage < 2:
-            # Stage 2: Extract problems
-            parsed = context.get("parsed_data") if stage >= 1 else parsed
-            problems = await self._extract_problems(parsed)
-            self.save_context({"problem_count": len(problems)}, task_stage=2)
-            self.report_progress(70, f"Extracted {len(problems)} problems")
-            await self.checkpoint()
-
-        # Stage 3: Save to DB
         dal.exams.save_problems(self.config.exam_id, problems)
-        self.report_progress(100, "Complete")
+        self.progress.report(100, t("task.progress.complete"))
 
         return TaskResult(
             status=TaskResultStatus.SUCCESS,
-            message=f"Ingested {len(problems)} problems",
-            data={"problem_count": len(problems), "exam_id": self.config.exam_id},
+            message=t("task.progress.extracted", count=len(problems)),
+            data=ExamIngestResultData(problem_count=len(problems), exam_id=self.config.exam_id),
         )
+```
+
+**Concrete task example — with crash recovery (opt-in)**:
+```python
+class LongRunningIngestTask(BaseTask[ExamIngestTaskConfig]):
+    async def _execute(self) -> TaskResult:
+        dal = get_context().dal
+        context, stage = self.tracking.load_context()  # Opt-in recovery
+
+        if stage < 1:
+            parsed = await self._parse_file()
+            self.tracking.save_context({"parsed_data": parsed}, task_stage=1)
+            self.progress.report(30, t("task.progress.parsing_file"))
+            await self.lifecycle.checkpoint()
+
+        if stage < 2:
+            parsed = context.get("parsed_data", None) or await self._parse_file()
+            problems = await self._extract_problems(parsed)
+            self.tracking.save_context({"problem_count": len(problems)}, task_stage=2)
+            self.progress.report(70, t("task.progress.extracted", count=len(problems)))
+            await self.lifecycle.checkpoint()
+
+        dal.exams.save_problems(self.config.exam_id, problems)
+        return TaskResult(status=TaskResultStatus.SUCCESS, message="Done")
 ```
 
 **What concrete tasks DON'T do** (all handled by base):
@@ -804,8 +848,8 @@ class TaskRecoveryManager:
             stage=stage,
         )
 
-        # Mark as PENDING and re-submit
-        task._state = TaskState.PENDING
+        # Transition via state machine (RUNNING->PENDING is valid for recovery)
+        task._transition(TaskState.PENDING)
         self.service_manager.queue_task_sync(service_name, task)
         logger.info(f"Recovered task {task_record.task_id} (service={service_name}, stage={stage})")
 ```
@@ -857,7 +901,7 @@ class BaseTask:
         self.config = config
         self.service_name = service_name
         self._state = TaskState.PENDING
-        self.task_id = -1  # Sentinel — will be set by _create_db_record()
+        self.task_id: int | None = None  # Set by _create_db_record() — will be set by _create_db_record()
         ...
 
     def _create_db_record(self) -> int:
@@ -880,7 +924,7 @@ class BaseTask:
 
     def _persist_state(self):
         """Update the existing DB record with current state."""
-        assert self.task_id > 0, "Task must have a DB record before persisting state"
+        assert self.task_id is not None, "Task must have a DB record before persisting state"
         dal = get_context().dal
         dal.tasks.update_state(self.task_id, self._state.value, message=self._message)
 ```
@@ -1431,7 +1475,7 @@ class InsufficientPermissionsError(AuthError): pass
 
 # --- File/storage ---
 class StorageError(EduBaseError): pass
-class FileNotFoundError(StorageError): pass
+class StorageFileNotFoundError(StorageError): pass
 class FileValidationError(StorageError): pass
 ```
 
@@ -2274,6 +2318,140 @@ class TestExamIngestTask:
 
 ---
 
+## Complexity Tiers (Onboarding Guide)
+
+**Tier 1 — Day 1** (write your first task):
+- `BaseTaskConfig`, `BaseTask`, `_execute() -> TaskResult`
+- `get_context().dal` for DB access
+- `TaskResultStatus` enum
+
+**Tier 2 — Week 1** (production features):
+- `self.progress.report()` for progress tracking
+- `self.lifecycle.checkpoint()` for pause/cancel support
+- `TaskConversation` for AI model calls
+- `BaseAgent` for multi-step AI workflows
+- Prompt templates in `src/prompts/`
+
+**Tier 3 — Month 1** (infrastructure):
+- `self.tracking.save_context()` for crash recovery
+- Activity tracking and `track_span()`
+- `ThrottleManager` and usage metering
+- `ServiceBackend` protocol (remote execution)
+- `TaskRecoveryManager` internals
+
+## Named Constants
+
+All magic numbers must use named constants. Key constants:
+```python
+# Auth
+AUTH_TOKEN_EXPIRY_MINUTES = 7 * 24 * 60  # 7 days
+
+# Task execution
+DEFAULT_MAX_CONVERSATION_TURNS = 20
+DEFAULT_DRAIN_TIMEOUT_SECONDS = 30.0
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30
+DEFAULT_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
+DEFAULT_MAX_STALENESS = timedelta(hours=1)
+DEFAULT_MAX_RECOVERY_ATTEMPTS = 3
+DEFAULT_POLL_INTERVAL_SECONDS = 1.0
+
+# File size enforcement
+FILE_SIZE_WARN_LINES = 500
+FILE_SIZE_MAX_LINES = 600
+
+# Throttling
+DEFAULT_MAX_REQUESTS_PER_MINUTE = 60
+DEFAULT_MAX_AI_CALLS_PER_HOUR = 100
+DEFAULT_MAX_TOKENS_PER_DAY = 1_000_000
+DEFAULT_MAX_CONCURRENT_TASKS = 5
+DEFAULT_THROTTLE_CACHE_TTL_SECONDS = 60
+```
+
+## Additional Design Elements (from round 3 review)
+
+### TaskMetrics (typed, not dict)
+```python
+class TaskMetrics(BaseModel):
+    duration_ms: float = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_ai_calls: int = 0
+    retry_attempts: int = 0
+```
+
+### `track_span()` context manager (DRY — eliminates boilerplate)
+```python
+@contextmanager
+def track_span(kind: SpanKind, name: str, **metadata):
+    """Reusable span tracking — all layers use this instead of manual start/end."""
+    activity = get_activity()
+    if not activity:
+        yield None
+        return
+    span_id = activity.start_span(kind, name, **metadata)
+    try:
+        yield span_id
+    except Exception as e:
+        activity.end_span(span_id, status="error", error_message=str(e))
+        raise
+    else:
+        activity.end_span(span_id)
+
+# Usage in any layer:
+with track_span(SpanKind.AI_CALL, f"ai:{label}", model_class=model.model_class) as span_id:
+    response = await model.handle_chat_completion_request_async(...)
+    if span_id:
+        get_activity().end_span(span_id, input_tokens=response.usage.input_tokens, ...)
+```
+
+### ContextVar propagation (explicit in BaseService)
+```python
+# In BaseService thread dispatch — REQUIRED for activity tracking + i18n:
+import contextvars
+ctx = contextvars.copy_context()
+thread_pool.submit(ctx.run, task._run_wrapper)
+```
+
+### Activity middleware exclusions
+```python
+ACTIVITY_EXCLUDE_PATHS = {"/health", "/docs", "/openapi.json"}
+
+class ActivityTrackingMiddleware:
+    async def __call__(self, request, call_next):
+        if request.url.path in ACTIVITY_EXCLUDE_PATHS:
+            return await call_next(request)  # Skip tracking
+        ...
+```
+
+### Async task activity pattern
+For fire-and-forget task submissions, the middleware persists a "request-only" activity (Span 0). The task thread creates its own `ActivityContext` linked by `request_id`. Query both via `WHERE request_id = ?` for the full trace.
+
+### Prompt security
+Any prompt variable containing user-generated content (student answers, uploaded text) MUST be sanitized before rendering: length limits, strip control characters. Document which prompt variables accept user input in each template's header comment.
+
+### DAL session sharing
+`DALBase._session()` checks for an active transaction (via `ContextVar`) before creating a new session. If a transaction is active, it joins it. Default behavior, not opt-in:
+```python
+_active_session: ContextVar[Session | None] = ContextVar('dal_session', default=None)
+
+@contextmanager
+def _session(self):
+    existing = _active_session.get()
+    if existing:
+        yield existing  # Join active transaction
+        return
+    # Create new session
+    session = self._session_factory()
+    try:
+        yield session
+        session.commit()
+    except:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+```
+
 ## Implementation Order
 
 | Step | Component | Key Files | Source Reference |
@@ -3105,7 +3283,7 @@ class ActivityContext(BaseModel):
         # Accumulate into activity totals
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
-        if kind == SpanKind.AI_CALL:
+        if span.kind == SpanKind.AI_CALL:
             self.total_ai_calls += 1
 
         # Pop current span back to parent
