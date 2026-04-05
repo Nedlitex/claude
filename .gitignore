@@ -11,6 +11,9 @@ statsig/
 telemetry/
 todos/
 
+# Session data (ephemeral conversation state)
+sessions/
+
 # Session-specific files
 history.jsonl
 stats-cache.json
