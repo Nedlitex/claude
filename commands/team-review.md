@@ -124,6 +124,7 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 > 5. Check for unsafe casts: `dict[str, Any]` passed where a typed model is expected, untyped `**kwargs`, `getattr()` without type narrowing.
 > 6. Check that `TYPE_CHECKING` imports are used correctly — runtime imports must not depend on type-only imports.
 > 7. Flag any function that returns different types on different code paths (e.g., sometimes `str`, sometimes `None`, sometimes `dict`) without a proper union return type.
+> 8. **REJECT any use of `hasattr()`/`getattr()` to call methods that should exist on typed objects.** If a method is expected to exist, it must be defined on the class or protocol. `hasattr` defeats static analysis and hides missing implementations. The only acceptable uses are: (a) checking for optional protocol methods, (b) introspection utilities, (c) `getattr` with a literal default for backwards compatibility.
 >
 > Rate each issue: REJECT (type error that would cause runtime failure), UNSAFE (type warning that masks a potential bug), SLOPPY (missing annotation that reduces IDE support). Must find at least 5 issues. End with CLEAN / NOT-CLEAN verdict.
 
