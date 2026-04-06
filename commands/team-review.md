@@ -54,6 +54,8 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 > **In plan review mode**: For every component in the plan, verify that the test plan covers it. If a component is described but no corresponding test file or test case is mentioned, REJECT it. Check: can each component be tested in isolation, is DI sufficient for test isolation, are there hidden global states, can lifecycle/state machines be tested without real threads, can retry logic be tested deterministically, is test infrastructure sufficient.
 >
 > *Code mode additions*: Check for hard-coded dependencies (direct imports of concrete classes instead of interfaces), time-dependent logic without clock abstraction, randomness without seed injection, and file system / network access in business logic. Every untested code path is a REJECT.
+>
+> **Admin portal rule**: Every new admin page (`src/admin/pages/`) MUST have corresponding Playwright e2e tests in `tests/frontend/`. Unit tests with mocked Streamlit are NOT sufficient — they don't prove the page renders and works in a browser. REJECT any admin page without a frontend test.
 
 **Reviewer 5 — "The Benchmarker" (Efficiency):**
 > Review {target} from the angle of **performance and efficiency**. Focus on: DB call frequency, serialization overhead, thread/event loop overhead, memory accumulation, lock contention, algorithmic complexity, unnecessary allocations. For each issue: specific file/section, problem, estimated impact (low/medium/high), concrete optimization.
