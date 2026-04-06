@@ -101,6 +101,7 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 > 5. Verify the onboarding path: can you figure out how to add a new task, a new DAL method, a new API endpoint, and a new agent JUST by reading the docs? Try each one mentally. If you get stuck, REJECT.
 > 6. **REJECT bloated docs.** CLAUDE.md should be under 300 lines. Module READMEs under 150 lines. If a doc file is mostly prose that could be replaced by a 5-line code example, it's too long. Docs that blow up the AI context window are a liability, not an asset. Cut ruthlessly — every line must earn its place.
 > 7. Prefer DO/DON'T lists and code examples over paragraphs. If you see a paragraph that could be a bullet point, flag it.
+> 8. **Localization rule**: CLAUDE.md states "Every user-facing string uses `t("key")` for localization." REJECT any new user-facing string (progress messages, error details, task results, admin UI labels/buttons/messages) that uses a hardcoded English string instead of `t()`. This includes: `self.progress.report(N, "English string")`, `HTTPException(detail="English string")`, `TaskResult(message="English string")`, and Streamlit calls like `st.title("English")`, `st.button("English")`, `st.error("English")`. Internal log messages and prompt templates are exempt.
 >
 > Rate each issue: REJECT (blocks — docs wrong, missing, or dangerously bloated), OUTDATED (docs don't match code), GAP (undocumented pattern), BLOAT (doc too long — needs trimming). End with a DOCS-READY / DOCS-NOT-READY verdict.
 
