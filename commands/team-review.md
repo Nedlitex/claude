@@ -105,11 +105,12 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 >
 > **In code review mode**:
 > 1. Identify the key business flows: user registration -> login -> submit task -> task executes -> get results. Trace EACH flow through the codebase from API endpoint to database and back.
-> 2. For each flow, check if an INTEGRATION TEST exists that exercises the full path (not just mocks). If there is no integration test for a critical business flow, REJECT.
+> 2. For each flow, check if an INTEGRATION TEST exists **in `tests/integration/`** that exercises the full path with **real DAL, real DB, real task lifecycle** (`task.run_async()`), and MockAIModel for AI calls. Tests that only call API handler functions with mocked DAL are NOT integration tests — they are unit tests and belong in `tests/backend/apis/`. A proper integration test must prove that data flows from ingestion through the real task execution to queryable results in the database.
 > 3. Check that error paths are tested end-to-end: what happens when the AI model returns an error? When the DB is down? When the user submits invalid input? When a task times out?
 > 4. Check that the task lifecycle works end-to-end: submit -> running -> progress updates -> completed. Submit -> running -> cancel. Submit -> running -> pause -> resume -> completed.
 > 5. Verify that activity tracking captures a complete trace for each business flow (API request -> task -> AI call -> response).
 > 6. Check for integration gaps: does the ServiceManager actually route tasks to services? Does the DAL session sharing actually work across multiple DAL calls? Does ContextVar propagation actually deliver the activity context to task threads?
+> 7. **REJECT any "integration test" that only exercises API handlers with mocked dependencies.** Real integration tests must: (a) seed data via real DAL, (b) execute the actual task/pipeline via `run_async()`, (c) verify results are queryable from the real database. If the test would still pass even if the task's `_execute()` method were empty, it is NOT an integration test.
 >
 > Rate each issue: REJECT (critical business flow has no end-to-end test), GAP (flow partially tested but missing key scenarios), NOTE (nice-to-have coverage). End with E2E-READY / E2E-NOT-READY verdict.
 
