@@ -56,6 +56,8 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 > *Code mode additions*: Check for hard-coded dependencies (direct imports of concrete classes instead of interfaces), time-dependent logic without clock abstraction, randomness without seed injection, and file system / network access in business logic. Every untested code path is a REJECT.
 >
 > **Admin portal rule**: Every new admin page (`src/admin/pages/`) MUST have corresponding Playwright e2e tests in `tests/frontend/`. Unit tests with mocked Streamlit are NOT sufficient — they don't prove the page renders and works in a browser. REJECT any admin page without a frontend test.
+>
+> **SQLite vs PostgreSQL gap rule**: Tests using in-memory SQLite with `Base.metadata.create_all()` bypass Alembic migrations entirely. This means a new table or column can pass ALL tests but fail in production because the migration was never applied or is incorrect. REJECT any new ORM model or schema change that does not include: (a) an Alembic migration, AND (b) a verification step in the plan that confirms `alembic upgrade head` succeeds against a real PostgreSQL database. If all tests use SQLite `create_all()`, flag this as a GAP — the migration path is untested.
 
 **Reviewer 5 — "The Benchmarker" (Efficiency):**
 > Review {target} from the angle of **performance and efficiency**. Focus on: DB call frequency, serialization overhead, thread/event loop overhead, memory accumulation, lock contention, algorithmic complexity, unnecessary allocations. For each issue: specific file/section, problem, estimated impact (low/medium/high), concrete optimization.
@@ -113,6 +115,7 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 > 5. Verify that activity tracking captures a complete trace for each business flow (API request -> task -> AI call -> response).
 > 6. Check for integration gaps: does the ServiceManager actually route tasks to services? Does the DAL session sharing actually work across multiple DAL calls? Does ContextVar propagation actually deliver the activity context to task threads?
 > 7. **REJECT any "integration test" that only exercises API handlers with mocked dependencies.** Real integration tests must: (a) seed data via real DAL, (b) execute the actual task/pipeline via `run_async()`, (c) verify results are queryable from the real database. If the test would still pass even if the task's `_execute()` method were empty, it is NOT an integration test.
+> 8. **Alembic migration gap**: If new ORM models or tables are introduced, verify that (a) an Alembic migration exists, (b) the plan includes a step to run `alembic upgrade head` against real PostgreSQL, and (c) integration tests don't ONLY use SQLite `create_all()` which bypasses migrations entirely. Tests that pass on SQLite but fail on PostgreSQL because the migration is wrong or missing are a critical gap. REJECT if new tables have no migration verification step.
 >
 > Rate each issue: REJECT (critical business flow has no end-to-end test), GAP (flow partially tested but missing key scenarios), NOTE (nice-to-have coverage). End with E2E-READY / E2E-NOT-READY verdict.
 
