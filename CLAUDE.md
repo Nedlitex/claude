@@ -127,6 +127,43 @@ When spawning a subagent via the Agent tool:
 4. Never specify output filenames — each agent owns its naming conventions
 5. Use `isolation: "worktree"` for SWE on multi-file changes to avoid conflicts
 
+### Parallel Execution (default when work is independent)
+
+**Maximize parallelism by default.** Sequential SWE invocations across independent rounds waste wall-clock time. Each SWE invocation is 15-90 minutes; serial chains compound fast.
+
+**The shape of parallel work:**
+1. **Single message, multiple Agent tool calls** — fire all parallel-eligible agents in ONE response. The harness runs them concurrently. Multiple Agent calls split across responses run serially.
+2. **`isolation: "worktree"` is MANDATORY for every parallel SWE.** Concurrent agents in the same checkout clobber each other's working tree (verified failure mode: pre-commit stash conflicts, ruff-format reverts, files reappearing after `git pull --rebase`). Without isolation, parallelism is broken-by-construction.
+3. **Allowlist files per agent.** Pass an explicit "files you may touch" + "files you must NOT touch" list in each prompt. Pre-empts merge conflicts at write time, not at merge time.
+4. **Lead merges sequentially after agents land.** Each worktree returns its branch + path. Lead pulls, fast-forwards or cherry-picks each branch in order. Conflicts surface at Lead, not inside the SWE.
+
+**When to parallelize:**
+- Independent stages of the same plan (S2 + S4 + S6 if files don't overlap).
+- Cleanup batches with non-overlapping concerns (correctness fixes vs frontend wiring vs documentation).
+- Code review / multi-angle review (already done — 10 parallel reviewers).
+- Research vs implementation when plan-of-record is locked.
+
+**When NOT to parallelize:**
+- **Sweeping renames** (e.g., `dal._session()` → `dal.session()` across 22 files): the rename touches files every other round also touches. Run sequentially after independent rounds finish.
+- **Ordered dependencies** (round B reads what round A wrote): serial.
+- **Same-file edits** (two agents both editing `taxonomy_dal.py`): serial OR strict allowlist split inside one file (rare; usually a sign you should split the file first).
+- **Plan-vs-implementation drift risk**: if plan is unstable, parallel implementations diverge from each other.
+
+**Failure modes seen in practice:**
+- Concurrent agents in main checkout: `git stash pop` after another agent's commit drops your unstaged edits silently.
+- Pre-commit's `Stashed changes conflicted with hook auto-fixes` blocks commits when another agent's `AM` files leak into the working tree mid-hook-run.
+- ESLint / ruff-format auto-fix on stale state from another agent's edits.
+
+**Parallel-fire pattern (Lead):**
+```
+Round A starts (in main checkout) → already running.
+Round B is independent of A in file allowlist → fire NOW with isolation: "worktree".
+Round C depends on A or B → wait.
+After A + B both land → fire C + D in parallel if independent.
+```
+
+The cost of an unused parallel slot is one extra serial 30-min wait. The cost of avoidable concurrent-edit corruption is hours of debugging clobbered work. **When in doubt, use `isolation: "worktree"` — never run parallel SWE in the same checkout.**
+
 ### Deduplication Rule
 
 **Reference, don't copy.** If guidance exists here, point to it:
