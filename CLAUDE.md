@@ -153,6 +153,8 @@ When spawning a subagent via the Agent tool:
 - Concurrent agents in main checkout: `git stash pop` after another agent's commit drops your unstaged edits silently.
 - Pre-commit's `Stashed changes conflicted with hook auto-fixes` blocks commits when another agent's `AM` files leak into the working tree mid-hook-run.
 - ESLint / ruff-format auto-fix on stale state from another agent's edits.
+- **Worktree auto-cleanup loses uncommitted work.** A worktree with NO commits on its branch is cleaned when the agent ends. An SWE that worked for 27 minutes without committing, got confused by a path-inspection bug, and stopped — produced zero artifacts and zero recoverable state. Mitigation is on the Lead side (every SWE briefing must specify "commit early, commit often, ≥5 commits per stage") and on the SWE side (see `~/.claude/agents/SWE.md` § Commit Discipline).
+- **Path confusion across checkouts.** Worktree-isolated SWE has pwd in a worktree path; absolute repo-root paths (`D:\edu\…`, `/home/user/project/…`) point at the MAIN checkout, NOT the worktree. SWEs that use `cmd /c type D:\edu\…` or `Get-Content D:\edu\…` to "verify their edits" see the main-checkout content (pre-stage state) and misdiagnose it as "my changes are being reverted." Mitigation: SWE briefings must explicitly forbid absolute-root-path file inspection. Use `Read`, `git status`, `git diff` — those resolve against the worktree.
 
 **Parallel-fire pattern (Lead):**
 ```
@@ -163,6 +165,18 @@ After A + B both land → fire C + D in parallel if independent.
 ```
 
 The cost of an unused parallel slot is one extra serial 30-min wait. The cost of avoidable concurrent-edit corruption is hours of debugging clobbered work. **When in doubt, use `isolation: "worktree"` — never run parallel SWE in the same checkout.**
+
+**SWE briefing checklist (every parallel SWE dispatch MUST include):**
+1. Plan reference (path to the plan file).
+2. Stage scope (which section of the plan).
+3. **File allowlist (write)** + **forbidden list** — explicit, not "files relevant to this stage."
+4. **Commit discipline**: "Commit early, commit often. ≥5 commits per stage. Worktree auto-cleans if no commits exist on the branch — uncommitted work is lost work."
+5. **Worktree path warning**: "Your pwd is your worktree. Absolute paths like `D:\edu\…` point at the MAIN checkout, NOT your worktree. Use `Read`/`git status`/`git diff` to verify your edits — never `cmd /c type <absolute-root-path>` or equivalent."
+6. **Test conventions** (project-specific — e.g., `scripts/smart_test.py` not bare pytest; `.venv/Scripts/python` on Windows).
+7. **Verification gates** the SWE must pass before final commit (pyright, smart_test, lint).
+8. **Report-back format**: list of commits, test results, any plan deviations.
+
+Missing any of these in a briefing is a Lead failure. The harness will not save you; the SWE will follow the gaps in your prompt to a bad place.
 
 ### Deduplication Rule
 
