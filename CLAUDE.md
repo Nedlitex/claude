@@ -178,6 +178,20 @@ The cost of an unused parallel slot is one extra serial 30-min wait. The cost of
 
 Missing any of these in a briefing is a Lead failure. The harness will not save you; the SWE will follow the gaps in your prompt to a bad place.
 
+**Parallel-dispatch isolation verification (Lead, MANDATORY after firing parallel `isolation: "worktree"` agents):**
+
+Investigated 2026-05-15 incident: firing multiple `Agent` calls with `isolation: "worktree"` in a single response **does not always actually isolate the agents into separate worktrees**. Symptom: both agents operate on the main checkout. Evidence the post-mortem found:
+- One agent's pre-commit hooks stashed the OTHER agent's unstaged work mid-edit → the second agent saw "files being reverted by a watcher" and gave up after 27 min.
+- One agent's `git commit` landed on `master` directly instead of on its assigned worktree branch — because its pwd was the main checkout, not the worktree.
+- Worktrees existed in `git worktree list` but were parked at unrelated commits (auto-save state) — i.e., created but never used.
+
+Until this is reliably fixed in the harness, Lead MUST verify isolation after dispatch:
+1. **Immediately after sending the multi-Agent message**, run `git worktree list` and confirm each agent has a worktree at the expected branch name.
+2. **Within ~5 minutes of dispatch**, run `git log --oneline <agent-branch>` for each agent's branch and confirm new commits appear on the BRANCH (not on `master`). If commits are landing on `master`, isolation failed — kill the other parallel agents immediately to prevent stash-collision damage, fall back to sequential dispatch.
+3. If only ONE agent landed on its worktree branch and the OTHER landed on `master`, the "main checkout" agent's pre-commit hooks will stash and unstash the working tree under the other agents' feet. Sequential dispatch is the only safe path until the harness fix lands.
+
+Sequential dispatch (one Agent call per response, await completion before next) is **always** properly isolated. The wall-clock cost of sequencing (~30 min per stage) is worth paying when the alternative is 27+ minutes of corrupted work.
+
 ### Deduplication Rule
 
 **Reference, don't copy.** If guidance exists here, point to it:
