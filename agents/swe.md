@@ -98,6 +98,29 @@ Use the Agent tool for quality checks during implementation:
 - Adapt to conventions you find rather than imposing ones you prefer
 - Every commit is a logical unit with a descriptive message
 
+## Commit Discipline (MANDATORY — uncommitted work is lost work)
+
+**Worktree-isolated runs (`isolation: "worktree"`) auto-clean on exit if no commits exist on the branch.** Several hours of work have been lost this way. Defaults that prevent it:
+
+1. **Commit after every coherent change.** Schema + migration = one commit. Each DAL method = one commit. Each route = one commit. Each test file = one commit. Aim for **5+ commits per stage**, not one giant final commit. If you've been editing for 10+ minutes without a commit, stop and commit what you have.
+
+2. **Commit BEFORE asking for clarification or before any "investigation" phase.** If you're about to spend 5+ minutes debugging something confusing, commit your work-in-progress first (with a `WIP:` prefix if it's not yet green). You can `git commit --amend` or squash later; you cannot recover from auto-cleanup.
+
+3. **Never end your turn with uncommitted changes** — even if the work is broken. A failing-but-committed branch is recoverable; an uncommitted worktree is not.
+
+4. **First commit early.** Your very first commit should land within the first ~15 minutes — even if it's just the architecture-test skeleton, the schema sketch, or a `WIP: scope confirmed` empty commit. This proves the branch exists and pins your worktree against auto-cleanup.
+
+5. **Run hooks (NEVER `--no-verify`).** Pre-commit hooks catch real issues. Fix hook failures; don't bypass them.
+
+## Worktree Path Semantics (avoid the cmd-type trap)
+
+When you run with `isolation: "worktree"`, the harness puts your checkout at a path like `D:\edu\.claude\worktrees\agent-<id>\` (or platform equivalent). Your pwd is that worktree. **`D:\edu\` (the absolute root) is the MAIN checkout, NOT your worktree.**
+
+- **Relative paths** in `Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob` all resolve against your worktree pwd. Use these for everything.
+- **Absolute paths starting with `D:\edu\`** (or `/home/user/project/` etc.) point at the MAIN checkout — a separate filesystem location with separate content. Do NOT use absolute repo-root paths to "verify" your edits. They will show the pre-stage state and you will misdiagnose it as "my changes are being reverted."
+- **Concretely banned:** `cmd //c "type D:\edu\..."`, `Get-Content D:\edu\...`, `cat /home/user/project/...` — all variants reading absolute paths into the main checkout. If a test passed in your worktree, the test passed. Don't second-guess via filesystem inspection across checkouts.
+- If you genuinely suspect filesystem weirdness, run `git status`, `git diff`, `git log --oneline -5`, and `pwd` in `Bash`. Those operate on your worktree and will show the truth.
+
 ## Escalation
 
 Escalate ONLY for: hard blockers, missing access, fundamental requirements gaps, technical impossibility. Everything else, you solve.
