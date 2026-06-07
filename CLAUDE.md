@@ -62,12 +62,36 @@ Each project should maintain a `.tracking/` directory (bootstrap with `/init-pro
 ├── journal/            # Daily conversation logs (YYYY-MM-DD.md)
 ├── research/           # Research outputs from Researcher
 ├── plans/              # Implementation plans from Planner
-├── details/            # Detailed breakdowns for plans
+│   ├── <id>.md         #   single-phase plan = one flat file
+│   └── <id>/           #   MULTI-PHASE plan = its own folder (see below)
+│       ├── plan.md     #     the plan of record (title, stages, criteria)
+│       ├── details/    #     per-stage detail/briefing files (S1.md, S2.md, …)
+│       ├── reviews/    #     committee-review outputs / iteration notes
+│       └── progress.md #     running status across phases
+├── details/            # Detailed breakdowns for single-file plans
 ├── changes/            # Implementation notes from SWE
 ├── cannon/             # Curated, validated knowledge (highest-trust source)
 ├── investigations/     # Production triage from SRE
 └── scripts/            # Plan validation and tracking tools
 ```
+
+### Multi-Phase Plan Folders
+
+A plan with **multiple phases/stages** (more than ~3 stages, or any plan that will be implemented across several SWE dispatches) lives in **its own folder** `.tracking/plans/<plan-id>/`, not a flat file. This keeps the plan of record, per-stage briefings, committee-review iterations, and running progress co-located and individually trackable instead of bloating one monolithic file.
+
+```
+.tracking/plans/20260607d-presigned-multipart-batch-upload/
+├── plan.md       # plan of record — validate-plan.py targets THIS file
+├── details/      # one file per stage (S1.md … Sn.md): file allowlists, briefings, line refs
+├── reviews/      # committee-review rounds (round-1.md, round-2.md) + resolutions
+└── progress.md   # stage checkboxes + merge order + what's landed
+```
+
+Rules:
+- `plan.md` is the canonical plan; `validate-plan.py` and `--current-step`/`--update` run against `.../plan.md`.
+- A **single-phase** plan stays a flat `.tracking/plans/<id>.md` — don't over-fold trivial work.
+- When promoting a flat plan to multi-phase, `git mv` it to `<id>/plan.md` and split stage detail into `details/`.
+- Per-stage detail files hold the SWE-briefing specifics (file allowlists, forbidden lists, exact line refs) so `plan.md` stays the high-altitude map.
 
 ### Cannon — Curated Knowledge Store
 
