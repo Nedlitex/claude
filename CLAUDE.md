@@ -61,37 +61,39 @@ Each project should maintain a `.tracking/` directory (bootstrap with `/init-pro
 ├── tsg.md              # Troubleshooting guide — problem→cause→fix entries
 ├── journal/            # Daily conversation logs (YYYY-MM-DD.md)
 ├── research/           # Research outputs from Researcher
-├── plans/              # Implementation plans from Planner
-│   ├── <id>.md         #   single-phase plan = one flat file
-│   └── <id>/           #   MULTI-PHASE plan = its own folder (see below)
-│       ├── plan.md     #     the plan of record (title, stages, criteria)
-│       ├── details/    #     per-stage detail/briefing files (S1.md, S2.md, …)
-│       ├── reviews/    #     committee-review outputs / iteration notes
-│       └── progress.md #     running status across phases
-├── details/            # Detailed breakdowns for single-file plans
+├── plans/              # Implementation plans from Planner — one flat <id>.md per plan
+│   ├── <id>.md         #   standalone plan = a flat file
+│   └── <initiative>/   #   RELATED plans (a multi-part initiative) grouped in one folder
+│       ├── <id-part1>.md  #   each part stays its own flat plan file (NOT renamed to plan.md)
+│       └── <id-part2>.md  #   e.g. work-queue/ holds its 4 sequential plans
+├── details/            # Detailed breakdowns for plans
 ├── changes/            # Implementation notes from SWE
 ├── cannon/             # Curated, validated knowledge (highest-trust source)
 ├── investigations/     # Production triage from SRE
 └── scripts/            # Plan validation and tracking tools
 ```
 
-### Multi-Phase Plan Folders
+### Grouping Related Plans (multi-part initiatives)
 
-A plan with **multiple phases/stages** (more than ~3 stages, or any plan that will be implemented across several SWE dispatches) lives in **its own folder** `.tracking/plans/<plan-id>/`, not a flat file. This keeps the plan of record, per-stage briefings, committee-review iterations, and running progress co-located and individually trackable instead of bloating one monolithic file.
+When ONE body of work spans **several related plans** (sequential parts of the same initiative), group them in a **shared folder named for the initiative**. Each part stays its **own flat plan file** inside — keep the original `<id>-<slug>.md` filename; do NOT rename to `plan.md` and do NOT add `details/`/`reviews/`/`progress/` scaffolding (a single plan file holds its own stages, criteria, and review-resolution notes inline).
 
 ```
-.tracking/plans/20260607d-presigned-multipart-batch-upload/
-├── plan.md       # plan of record — validate-plan.py targets THIS file
-├── details/      # one file per stage (S1.md … Sn.md): file allowlists, briefings, line refs
-├── reviews/      # committee-review rounds (round-1.md, round-2.md) + resolutions
-└── progress.md   # stage checkboxes + merge order + what's landed
+.tracking/plans/
+├── work-queue/                         # the initiative
+│   ├── 20260606b-work-queue-abstraction-and-in-process-dispatch.md
+│   ├── 20260607b-work-queue-durable-backend.md
+│   ├── 20260607c-work-queue-reprocess-and-idempotency.md
+│   └── 20260606c-pipeline-idempotency-hardening-plan.md
+├── shared-state/                       # another initiative (3 parts)
+│   └── …
+└── 20260606-model-routing-cost-tracking.md   # standalone plan = flat file
 ```
 
 Rules:
-- `plan.md` is the canonical plan; `validate-plan.py` and `--current-step`/`--update` run against `.../plan.md`.
-- A **single-phase** plan stays a flat `.tracking/plans/<id>.md` — don't over-fold trivial work.
-- When promoting a flat plan to multi-phase, `git mv` it to `<id>/plan.md` and split stage detail into `details/`.
-- Per-stage detail files hold the SWE-briefing specifics (file allowlists, forbidden lists, exact line refs) so `plan.md` stays the high-altitude map.
+- A **standalone** plan (no siblings) stays a flat `.tracking/plans/<id>.md`. Don't make a folder for one plan.
+- Group **only** when there are genuinely related parts of one initiative. The folder is for grouping, not for per-plan scaffolding.
+- `validate-plan.py` / `--current-step` / `--update` target the individual `.md` file (in or out of a folder), unchanged.
+- The `<id>` date-prefix inside the filename preserves ordering within the folder.
 
 ### Cannon — Curated Knowledge Store
 
