@@ -1,6 +1,6 @@
 ---
 name: review-admin-ui
-description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and the edu_test database (EDU_TEST_MODE=1, so nothing leaks into the dev `edu` or prod DB). Runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
+description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and the edu_test database (EDU_TEST_MODE=1, so nothing leaks into the dev `edu` or prod DB), wiping edu_test clean BEFORE and AFTER so the shared test DB never accumulates review data. Runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
 ---
 
 # review-admin-ui
@@ -89,6 +89,20 @@ Backend cold boot ~10–30s; Next first compile ~10–40s. Re-poll until both 20
 the backend never comes up, read its background output (PG connection? storage
 config?).
 
+### 5b. Wipe `edu_test` to a clean slate (BEFORE the review)
+The review writes into `edu_test` (shared with pytest), so start clean and leave
+clean. Run the row-wipe AFTER the backend is healthy (schema present), with the
+same PG creds:
+```
+$env:EDU_TEST_DB = "edu_test"   # or edu_playwright_test if pytest is running
+$env:DATABASE__PG_HOST="localhost"; $env:DATABASE__PG_PORT="5432"
+$env:DATABASE__PG_USERNAME="postgres"; $env:DATABASE__PG_PASSWORD="postgres"
+& ".venv\Scripts\python.exe" "<repo>\.claude\skills\review-admin-ui\reset_edu_test.py"
+```
+It `DELETE`s every row in reverse FK order (keeping only the `users.id=1`
+super-admin sentinel) and refuses to touch the dev `edu` DB. Use `--check` first
+if you want to see current row counts without deleting.
+
 ### 6. Drive the review IN THIS ORDER (self-seeding)
 
 Core browser loop for every interaction: `browser_snapshot` (get refs) → act
@@ -159,10 +173,19 @@ Copy `report-template.md` to `.tracking/ui-reviews/<YYYY-MM-DD>-admin-ui-review.
 Then tell the user the report path and **`SendUserFile`** the key failing
 screenshots as proof.
 
-### 8. Teardown
-`browser_close()`. The stack ran on an isolated pair + edu_test, so it is safe to
-stop: `kill-ports.ps1 -Ports <FPORT>,<BPORT>`. Leave it running only if the user
-wants to keep poking; mention the URLs.
+### 8. Teardown (always leave `edu_test` clean)
+1. `browser_close()`.
+2. **Wipe `edu_test` again** so the review leaves nothing behind (same command as
+   step 5b — run it BEFORE killing the backend, while the DB is reachable, or after;
+   it connects directly to PG so either order works):
+   ```
+   & ".venv\Scripts\python.exe" "<repo>\.claude\skills\review-admin-ui\reset_edu_test.py"
+   ```
+3. Stop the isolated stack: `kill-ports.ps1 -Ports <FPORT>,<BPORT>`.
+4. Delete the issued credential: remove `<repo>\.claude\skills\review-admin-ui\pem\`.
+
+Leave the stack running only if the user wants to keep poking — but still run the
+post-run wipe when they're done so the shared test DB doesn't accumulate review data.
 
 ## Notes
 - **Why super-admin first:** Admin Management is the only surface that mints an
