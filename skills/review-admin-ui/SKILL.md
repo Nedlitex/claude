@@ -53,8 +53,17 @@ into the per-run folder (step 7).
 ## Steps
 
 Use the **PowerShell tool** for steps 1–5 (invoke scripts with `&` + an ABSOLUTE
-path). Use **absolute repo paths** under `D:\edu2\…` (or wherever this clone lives —
-resolve with `git rev-parse --show-toplevel`).
+path). **Do NOT hardcode any repo path** — this skill runs in whatever repo/clone
+is checked out (`D:\edu`, `D:\edu2`, a worktree, …). Resolve the root ONCE and use
+it everywhere `<repo>` appears below:
+```powershell
+$repo = (git rev-parse --show-toplevel).Trim()
+"$repo"
+```
+The skill's own bundled assets (`pick-ports.ps1`, `kill-ports.ps1`, `review_db.py`)
+live under `$repo\.claude\skills\review-admin-ui\` when the project vendors them, or
+`$HOME\.claude\skills\review-admin-ui\` (user scope) otherwise — prefer the repo copy
+if present.
 
 ### 1. Pick a free port pair
 ```

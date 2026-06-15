@@ -20,8 +20,9 @@ code, so the browser would verify the wrong build.
 
 ## Prerequisite: Playwright MCP server must be loaded
 
-This skill needs the `mcp__playwright__*` tools. They come from the `playwright`
-MCP server in `D:\edu\.mcp.json`. **MCP tools only load at session startup** — if
+This skill needs the `mcp__playwright__*` tools. They come from a `playwright`
+MCP server registered either user-scope (`~/.claude.json`) or in the repo's
+`.mcp.json`. **MCP tools only load at session startup** — if
 `ToolSearch` for `browser_navigate` returns nothing, the server was added/changed
 in this session and is NOT yet usable.
 
@@ -34,28 +35,41 @@ in this session and is NOT yet usable.
   the whole point is real, screenshotted automation.
 
 Screenshots are written by the MCP server to its configured `--output-dir`. The
-**global (user-scope)** Playwright MCP in `~/.claude.json` writes to
-`C:\Users\wshen\.claude\screenshots\`. If a project pins its own `.mcp.json`
-playwright entry (e.g. edu → `D:\edu\src\frontend\admin\tests\manual\screenshots\mcp\`),
-that project-scope override wins inside that repo. `browser_take_screenshot`
-returns/saves a file under whichever dir is active; pass that path to `SendUserFile`.
+**global (user-scope)** Playwright MCP writes to `~/.claude/screenshots/`
+(`C:\Users\<you>\.claude\screenshots\` on Windows). If a project pins its own
+`.mcp.json` playwright entry with a repo-relative `--output-dir` (e.g.
+`<repo>/src/frontend/admin/tests/manual/screenshots/mcp/`), that project-scope
+override wins inside that repo. `browser_take_screenshot` returns/saves a file
+under whichever dir is active; pass that returned path to `SendUserFile` — never
+hardcode the dir, read it back from the tool result.
 
 ## Steps
 
 Use the **PowerShell tool** (already runs in pwsh) for steps 1–3. Invoke scripts
 with the call operator `&` and an ABSOLUTE path — `pwsh -File <relative>` fails to
-resolve from the tool's working dir.
+resolve from the tool's working dir. **Do NOT hardcode any repo path** — this skill
+runs in whatever repo is checked out. Resolve the roots first:
+
+0. **Resolve the repo root and this skill's dir** (PowerShell tool):
+   ```powershell
+   $repo  = (git rev-parse --show-toplevel).Trim()       # the checked-out repo (e.g. D:\edu, D:\edu2, a worktree)
+   $skill = "$HOME\.claude\skills\verify-admin"            # this skill's bundled assets (kill-ports.ps1)
+   "repo=$repo skill=$skill"
+   ```
+   Use `$repo\scripts\…` for the app launchers and `$skill\…` for the bundled
+   helper. (If the project ships its own `.claude/skills/verify-admin/`, prefer
+   `$repo\.claude\skills\verify-admin` for the helper.)
 
 1. **Kill existing ports (mandatory clean slate).**
-   ```
-   & "D:\edu\.claude\skills\verify-admin\kill-ports.ps1"
+   ```powershell
+   & "$skill\kill-ports.ps1"
    ```
    (Add `-Ports 3001,8001` to target a non-default pair.)
 
 2. **Start the backend** (background — it runs uvicorn in the foreground, so it
    must stay attached as a long-running task). PowerShell tool, `run_in_background: true`:
-   ```
-   & "D:\edu\scripts\start_backend_local.ps1"
+   ```powershell
+   & "$repo\scripts\start_backend_local.ps1"
    ```
    A non-fatal `Prod DB sentinel probe failed … SchemaParityError` at boot is
    fine — it only means the (unused) prod-target DB is behind; local serves
@@ -63,8 +77,8 @@ resolve from the tool's working dir.
 
 3. **Start the frontend** (the .bat self-detaches into its own window and returns
    immediately — run it foreground; it does NOT block):
-   ```
-   cmd /c "D:\edu\scripts\start_admin_frontend.bat"
+   ```powershell
+   cmd /c "$repo\scripts\start_admin_frontend.bat"
    ```
 
 4. **Wait until BOTH are healthy** (bounded poll — these are external
@@ -118,11 +132,11 @@ resolve from the tool's working dir.
    errors is a FAIL, not a pass.
 
 6. **Report with proof.** Output a PASS/FAIL line per check, then **`SendUserFile`
-   every screenshot** from the active `--output-dir` (global:
-   `C:\Users\wshen\.claude\screenshots\`; edu project override:
-   `D:\edu\src\frontend\admin\tests\manual\screenshots\mcp\`) (`status: "proactive"`
-   if the user is away). The screenshots ARE the deliverable — never claim a check
-   passed without sending its screenshot. On any FAIL, also surface the relevant
+   every screenshot** using the path each `browser_take_screenshot` returned (the
+   active `--output-dir` — user-scope `~/.claude/screenshots/` or a repo-relative
+   project override; do not hardcode it) (`status: "proactive"` if the user is
+   away). The screenshots ARE the deliverable — never claim a check passed without
+   sending its screenshot. On any FAIL, also surface the relevant
    `browser_console_messages` / `browser_network_requests` lines.
 
 7. **Teardown (ask first).** Call `browser_close()` to drop the browser. Leave the
@@ -132,13 +146,13 @@ resolve from the tool's working dir.
 ## Notes
 
 - Backend reads the repo `.env` (storage backend, DB) and binds loopback. It uses
-  the real local `edu` DB — this verifies real behavior, not a test DB.
-- The frontend proxy needs `ADMIN_SECRET` (in `src/frontend/admin/.env.local`) to
-  match the backend `ADMIN__SECRET` (in `.env`). A `403 privilege escalation` on
-  every request means they differ.
+  the repo's configured local dev DB — this verifies real behavior, not a test DB.
+- The frontend proxy needs `ADMIN_SECRET` (in `<repo>/src/frontend/admin/.env.local`)
+  to match the backend `ADMIN__SECRET` (in `<repo>/.env`). A `403 privilege
+  escalation` on every request means they differ.
 - The MCP server downloads its own Chromium on first run (`npx -y @playwright/mcp`).
   If launch fails for a missing browser, run
-  `cd src/frontend/admin && pnpm exec playwright install chromium`.
+  `cd <repo>/src/frontend/admin && pnpm exec playwright install chromium`.
 - Headful/headless: the MCP server defaults to headed Chromium. To run headless,
   add `--headless` to the server `args` in `.mcp.json`.
 - `--output-dir`, `--viewport-size`, and `--browser` are pinned in `.mcp.json`;
