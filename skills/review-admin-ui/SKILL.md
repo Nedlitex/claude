@@ -1,6 +1,6 @@
 ---
 name: review-admin-ui
-description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and a DEDICATED review database `edu_ui_review` (EDU_TEST_MODE=1, so nothing leaks into the dev `edu`, the pytest `edu_test`, or prod DB) — recreated pristine BEFORE the run and dropped AFTER, so it never collides with a running test suite. SEEDS the DB (scripts/seed_admin_ui_review.py) so pagination/filter/detail tests are executable, runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
+description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and a DEDICATED review database `<prefix>_test_review` (EDU_TEST_MODE=1, so nothing leaks into the dev `edu`, the pytest `edu_test`, or prod DB) — recreated pristine BEFORE the run and dropped AFTER, so it never collides with a running test suite. SEEDS the DB (scripts/seed_admin_ui_review.py) so pagination/filter/detail tests are executable, runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
 ---
 
 # review-admin-ui
@@ -17,12 +17,12 @@ It differs from the lighter `verify-admin` skill in four ways the user asked for
    Both `scripts/start_admin_frontend.bat` and `scripts/start_backend_local.ps1`
    already take a port argument.
 2. **Dedicated, disposable DB.** The backend runs with `EDU_TEST_MODE=1` →
-   `EDU_TEST_DB=edu_ui_review`, a database used by NOTHING else, so the review can
+   `EDU_TEST_DB=<prefix>_test_review`, a database used by NOTHING else, so the review can
    create/delete freely with zero chance of colliding with the pytest suite (which
    owns `edu_test`). `review_db.py` recreates it pristine before the run and drops
    it after. (`src/config/settings.py::_enforce_test_mode` enforces the redirect and
    refuses to target the dev `edu` DB; `review_db.py` additionally refuses to touch
-   `edu`/`edu_test`/`edu_test_e2e`/`edu_test_prod`.)
+   the dev `edu` DB or this clone's pytest DBs `<prefix>_test{,_e2e,_prod}`.)
 3. **Self-seeding order.** It runs the **super-admin** surface FIRST (local
    one-click super-admin → Admin Management) so the run *creates its own admin user
    and downloads its .pem*, then signs in as that admin via PEM login for the rest.
@@ -59,13 +59,22 @@ resolve with `git rev-parse --show-toplevel`).
 Parse `FPORT=` / `BPORT=` from stdout. Use them everywhere below. (Pass
 `-FrontStart/-BackStart` if the band is busy.)
 
+### 1b. Compute the review DB name
+The review DB is THIS clone's dedicated `<repo-folder>_test_review` (e.g. for
+`D:\edu2` → `edu2_test_review`). `review_db.py` and the seed already DEFAULT to
+exactly this, so you only need it explicitly for the backend's `EDU_TEST_DB`:
+```
+$ReviewDb = ((git -C "<repo>" rev-parse --show-toplevel | Split-Path -Leaf).ToLower() + "_test_review")
+"$ReviewDb"
+```
+
 ### 2. Clean slate on the chosen pair
 ```
 & "<repo>\.claude\skills\review-admin-ui\kill-ports.ps1" -Ports <FPORT>,<BPORT>
 ```
 
 ### 2b. Recreate the dedicated review DB (pristine, BEFORE the backend)
-Drop + create `edu_ui_review` with the `vector`/`pg_trgm` extensions, so the run
+Drop + create `<prefix>_test_review` with the `vector`/`pg_trgm` extensions, so the run
 starts from a clean, isolated database. Set the PG creds in the same command:
 ```
 $env:DATABASE__PG_HOST="localhost"; $env:DATABASE__PG_PORT="5432"
@@ -73,20 +82,20 @@ $env:DATABASE__PG_USERNAME="postgres"; $env:DATABASE__PG_PASSWORD="postgres"
 & ".venv\Scripts\python.exe" "<repo>\.claude\skills\review-admin-ui\review_db.py" recreate
 ```
 (Use `create` instead of `recreate` to keep an existing review DB across runs.)
-This never touches `edu`/`edu_test`/`edu_test_e2e`/`edu_test_prod` — it refuses by
-name.
+This never touches the dev `edu` DB or this clone's pytest `<prefix>_test*` DBs —
+it refuses by name.
 
-### 3. Start the backend on `edu_ui_review` (background, run_in_background: true)
+### 3. Start the backend on `<prefix>_test_review` (background, run_in_background: true)
 Set the test-mode env **in the same command** so uvicorn inherits it (shell state
 does not persist between PowerShell tool calls):
 ```
 $env:EDU_TEST_MODE = "1"
-$env:EDU_TEST_DB   = "edu_ui_review"
+$env:EDU_TEST_DB   = $ReviewDb
 $env:DATABASE__AUTO_MIGRATE_LOCAL_ON_BOOT = "true"   # apply alembic head to the fresh review DB on boot
 & "<repo>\scripts\start_backend_local.ps1" -Port <BPORT>
 ```
 LOCAL_MODE is set by the script (super-admin surface ON). A non-fatal prod-sentinel
-`SchemaParityError` at boot is fine. The freshly-recreated `edu_ui_review` is empty;
+`SchemaParityError` at boot is fine. The freshly-recreated `<prefix>_test_review` is empty;
 the auto-migrate boot path builds the schema to head.
 
 ### 4. Start the frontend pointed at that backend (foreground — the .bat self-detaches)
@@ -109,7 +118,7 @@ Once the backend is healthy the schema exists but there is no `users.id=1`
 super-admin sentinel (it is not migration-seeded). Run `seed` to wipe any rows and
 insert the sentinel, so local super-admin + row attribution work:
 ```
-$env:EDU_TEST_DB = "edu_ui_review"
+$env:EDU_TEST_DB = $ReviewDb
 & ".venv\Scripts\python.exe" "<repo>\.claude\skills\review-admin-ui\review_db.py" seed
 ```
 `seed` empties every table in reverse FK order and re-inserts only the sentinel; on
@@ -121,7 +130,7 @@ An empty portal can't exercise pagination/filter/detail tests. Populate the DB w
 the state every checklist needs (≥1 page of users/tasks/logs/files/exams/etc., every
 filter value, rich detail entities) — the spec is `docs/qa/admin-ui-checklist/SEED-SPEC.md`:
 ```
-$env:EDU_TEST_DB = "edu_ui_review"
+$env:EDU_TEST_DB = $ReviewDb
 & ".venv\Scripts\python.exe" "<repo>\scripts\seed_admin_ui_review.py"
 ```
 It prints the per-entity counts it inserted (~400 rows). It refuses any DB but the
@@ -209,7 +218,7 @@ screenshots as proof.
 3. **Drop the whole review DB** — it is dedicated, so removing it leaves zero
    residue:
    ```
-   $env:EDU_TEST_DB = "edu_ui_review"
+   $env:EDU_TEST_DB = $ReviewDb
    & ".venv\Scripts\python.exe" "<repo>\.claude\skills\review-admin-ui\review_db.py" drop
    ```
 4. Delete the issued credential: remove `<repo>\.claude\skills\review-admin-ui\pem\`.
@@ -224,7 +233,7 @@ stray connection lingers; run it after step 2 to be clean.)
   admin-tier tabs need — no separate seeding script, and it tests the issue/login
   path for real.
 - **Fully isolated DB — no test-suite collision.** The run uses its own
-  `edu_ui_review` database (recreated before, dropped after), so a pytest suite on
+  `<prefix>_test_review` database (recreated before, dropped after), so a pytest suite on
   `edu_test` can run concurrently without interference. To keep the review DB around
   for post-run inspection, use `review_db.py create` (not `recreate`) in step 2b and
   skip the `drop` in teardown. To point at a different name, set `$env:EDU_TEST_DB`

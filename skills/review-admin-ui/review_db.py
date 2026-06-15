@@ -1,8 +1,9 @@
 """Lifecycle helper for the DEDICATED admin-UI-review database.
 
 The ``review-admin-ui`` skill runs its browser review against its OWN database
-(default ``edu_ui_review``) — never ``edu`` (dev) and never the pytest DBs
-(``edu_test`` / ``edu_test_e2e`` / ``edu_test_prod``). This gives the review full
+(default ``<prefix>_test_review``, e.g. ``edu2_test_review``) — never ``edu``
+(dev) and never the pytest DBs (``<prefix>_test`` / ``_test_e2e`` / ``_test_prod``;
+the prefix is the repo folder name). This gives the review full
 isolation: it can create/delete freely and is torn down at the end, with zero
 chance of colliding with a running test suite.
 
@@ -15,7 +16,7 @@ Subcommands::
     python review_db.py drop        # DROP the review DB entirely (teardown)
     python review_db.py check       # report per-table row counts, no mutation
 
-DB name comes from ``EDU_TEST_DB`` (default ``edu_ui_review``) — the same env var
+DB name comes from ``EDU_TEST_DB`` (default ``<prefix>_test_review``) — the same env var
 the backend reads under ``EDU_TEST_MODE=1`` to point at this DB. Connection params
 come from the standard ``DATABASE__PG_*`` env vars (defaults: localhost:5432 /
 postgres / postgres).
@@ -28,22 +29,36 @@ damage those.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
-# DBs this review tool must never create/drop/wipe.
-_PROTECTED = {"edu", "edu_test", "edu_test_e2e", "edu_test_prod"}
+# Reuse the ORM metadata (single source of truth for the table set + FK order).
+_REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO / "src"))
 
-_DBNAME = os.environ.get("EDU_TEST_DB", "edu_ui_review")
+# Per-clone DB prefix from the repo folder (edu→"edu", edu2→"edu2"), matching
+# tests/_db_prefix.py for the main checkout. The review DB is the clone's
+# DEDICATED, disposable `<prefix>_test_review` (e.g. edu2_test_review).
+_PREFIX = re.sub(r"[^a-z0-9]+", "_", _REPO.name.lower()).strip("_") or "edu"
+
+# DBs this review tool must NEVER create/drop/wipe: the dev DB + this clone's
+# pytest DBs. (The review DB `<prefix>_test_review` is NOT protected — it's the
+# target — and is namespaced away from the pytest `<prefix>_test*` DBs.)
+_PROTECTED = {
+    "edu",
+    _PREFIX,
+    f"{_PREFIX}_test",
+    f"{_PREFIX}_test_e2e",
+    f"{_PREFIX}_test_prod",
+}
+
+_DBNAME = os.environ.get("EDU_TEST_DB", f"{_PREFIX}_test_review")
 
 _HOST = os.environ.get("DATABASE__PG_HOST", "localhost")
 _PORT = os.environ.get("DATABASE__PG_PORT", "5432")
 _USER = os.environ.get("DATABASE__PG_USERNAME", "postgres")
 _PW = os.environ.get("DATABASE__PG_PASSWORD", "postgres")
-
-# Reuse the ORM metadata (single source of truth for the table set + FK order).
-_REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(_REPO / "src"))
 
 from sqlalchemy import create_engine, text  # noqa: E402
 
@@ -61,7 +76,7 @@ def _guard_destructive() -> None:
         sys.exit(
             f"[review_db] refusing a destructive op on '{_DBNAME}' — that is the "
             "dev or a pytest DB. Set EDU_TEST_DB to a dedicated review DB "
-            "(e.g. edu_ui_review)."
+            f"(e.g. {_PREFIX}_test_review)."
         )
 
 
