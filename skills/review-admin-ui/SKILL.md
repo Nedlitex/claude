@@ -1,6 +1,6 @@
 ---
 name: review-admin-ui
-description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and a DEDICATED review database `<prefix>_test_review` (EDU_TEST_MODE=1, so nothing leaks into the dev `edu`, the pytest `edu_test`, or prod DB) — recreated pristine BEFORE the run and dropped AFTER, so it never collides with a running test suite. SEEDS the DB (scripts/seed_admin_ui_review.py) so pagination/filter/detail tests are executable, runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
+description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and a DEDICATED review database `<prefix>_test_review` (EDU_TEST_MODE=1, so nothing leaks into the dev `edu`, the pytest `edu_test`, or prod DB) — recreated pristine BEFORE the run and dropped AFTER, so it never collides with a running test suite. SEEDS the DB (scripts/seed_admin_ui_review.py) so pagination/filter/detail tests are executable, runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop taking a screenshot per function as proof, and writes a Claude-feedable findings report into a per-run folder (.tracking/ui-reviews/admin-ui-review-<timestamp>/). A verifier script (scripts/verify_review_report.py) is the genuine-work gate — the review isn't done until every one of the 187 checklist functions has a verdict + screenshot. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
 ---
 
 # review-admin-ui
@@ -27,9 +27,12 @@ It differs from the lighter `verify-admin` skill in four ways the user asked for
    one-click super-admin → Admin Management) so the run *creates its own admin user
    and downloads its .pem*, then signs in as that admin via PEM login for the rest.
    No manual fixture setup.
-4. **Actionable report.** It writes `.tracking/ui-reviews/<date>-admin-ui-review.md`
-   from `report-template.md` — a priority-ordered fix backlog where each finding
-   names the failing gate, the likely component file, and a concrete fix.
+4. **Per-run folder + proof + a hard gate.** Each run gets its own
+   `.tracking/ui-reviews/admin-ui-review-<yyyyMMdd-HHmmss>/` holding `report.md` +
+   `screenshots/`. Every function gets a screenshot (proof of work). The report
+   (from `report-template.md`) is a priority-ordered fix backlog keyed by
+   `[NN-F#]`, and `scripts/verify_review_report.py` deterministically fails the run
+   unless ALL 187 checklist functions have a verdict + proof — no silent skipping.
 
 ## Prerequisite: Playwright MCP server must be loaded
 
@@ -44,7 +47,8 @@ Other prereqs: the project `.venv`, and a reachable local PostgreSQL cluster wit
 the `vector`/`pg_trgm` extensions available (the `postgres` superuser can create
 them). The review DB itself is auto-created — you do NOT pre-create it. Screenshots land in
 the MCP `--output-dir` (`src/frontend/admin/tests/manual/screenshots/mcp/`); write
-review shots under a `review/` filename prefix.
+each run's shots under a `<RUN_ID>/` filename prefix (step 6), then they are copied
+into the per-run folder (step 7).
 
 ## Steps
 
@@ -143,11 +147,30 @@ during the review if you want to exercise rollback / active-revision / Enable.)
 
 ### 6. Drive the review IN THIS ORDER (self-seeding)
 
+**Create this run's own folder first (fixed name format).** Every run is isolated
+in `.tracking/ui-reviews/<RUN_ID>/` where `RUN_ID = admin-ui-review-<yyyyMMdd-HHmmss>`:
+```
+$RunId  = "admin-ui-review-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+$RunDir = "<repo>\.tracking\ui-reviews\$RunId"
+New-Item -ItemType Directory -Force "$RunDir\screenshots" | Out-Null
+"$RunId"
+```
+The report and all screenshots for THIS run live under `$RunDir` (nothing is shared
+between runs).
+
+**Screenshot-per-function is the proof of work.** Take a screenshot for EVERY
+function you check, written into this run's folder via the MCP `filename`:
+`browser_take_screenshot(filename="<RUN_ID>/<NN>-F<n>-<lang>-<viewport>.png")` (the
+MCP server's `--output-dir` is the base, so it lands at
+`…/screenshots/mcp/<RUN_ID>/<NN>-F<n>-<lang>-<viewport>.png`). Examples:
+`admin-ui-review-20260614-2210/08-F2-en-phone.png`. At report time these are copied
+into `$RunDir\screenshots\` and the report references `screenshots/<file>.png`.
+
 Core browser loop for every interaction: `browser_snapshot` (get refs) → act
 (`browser_click`/`browser_type`/`browser_select_option`) → `browser_wait_for`
-(expected text, never a sleep) → `browser_take_screenshot`. After each navigation
-call `browser_console_messages()` once — a page that renders but throws console
-errors is a FAIL.
+(expected text, never a sleep) → `browser_take_screenshot` (named as above). After
+each navigation call `browser_console_messages()` once — a page that renders but
+throws console errors is a FAIL.
 
 **Two viewports, two languages.** For each function judge all 9 gates. Drive the
 happy path + the break-it path once, then cover the matrix efficiently:
@@ -160,7 +183,7 @@ translated).
 **Phase 0 — Super-admin first (creates the prerequisites):**
 1. `browser_navigate("http://127.0.0.1:<FPORT>/zh/login")`, snapshot, click the
    **local super-admin** one-click button → land on dashboard. Screenshot
-   `review/00-super-login.png`. (Covers file `00` F2 + the super-admin nav.)
+   `<RUN_ID>/00-F2-zh-desktop.png`. (Covers file `00` F2 + the super-admin nav.)
 2. Walk **`17-admin-management.md`**: in **Create admin**, fill username
    `qa.reviewer`, a label, a valid expiry (≤1y), submit → the browser downloads a
    **`.pem`**. Capture it: the MCP server saves downloads — locate the
@@ -179,7 +202,7 @@ translated).
 **Phase 1 — Admin, via the PEM you just issued:**
 4. Sign out (file `00` F3). On the login screen, use the PEM picker to sign in with
    `pem\qa-admin.pem` (file `00` F1 — the real PEM login path). Screenshot
-   `review/00-pem-login.png`.
+   `<RUN_ID>/00-F1-zh-desktop.png`.
 5. Walk the admin tabs **in dependency order**, creating data THROUGH the UI so
    later tabs have something to show (creating the fixture also tests the create
    flow):
@@ -194,22 +217,31 @@ translated).
 
 **For every function block:** do the **✅ Expected use** step and assert the
 concrete success; do the **⚠️ Break it** step and assert the graceful failure;
-read the **🚩 watch-points** and check exactly those against the snapshot. Record
-PASS / FAIL / NOT-OBSERVED per gate (Q1–Q9), with the lang/viewport where it failed.
-Destructive actions: confirm BOTH that the typed-confirm is required AND that Cancel
-changes nothing.
+read the **🚩 watch-points** and check exactly those against the snapshot;
+**take at least one screenshot named `<RUN_ID>/<NN>-F<n>-…png`**; and record a
+verdict. Destructive actions: confirm BOTH that the typed-confirm is required AND
+that Cancel changes nothing. There are **187 functions across files 00–19** — you
+must produce a coverage line + screenshot for EVERY one (the gate in step 7
+enforces this; there is no skipping).
 
-### 7. Write the report (the deliverable)
-Copy `report-template.md` to `.tracking/ui-reviews/<YYYY-MM-DD>-admin-ui-review.md`
-(get the date from `Get-Date -Format yyyy-MM-dd`; create the dir). Fill it:
-- the **Summary** table (per-file pass/fail/not-observed counts),
-- the **Fix backlog** — every FAIL as a P1/P2/P3 item with observed/expected, the
-  **likely component file** (take it from the checklist's 🚩 watch-point, which
-  already cites the source, or from the page route), and a **concrete fix**,
-- the **Full per-function results** for traceability,
-- attach each failing screenshot path.
-Then tell the user the report path and **`SendUserFile`** the key failing
-screenshots as proof.
+### 7. Write the report + PASS the genuine-work gate (the deliverable)
+1. Copy this run's screenshots into the run folder:
+   ```
+   Copy-Item "<repo>\src\frontend\admin\tests\manual\screenshots\mcp\$RunId\*" "$RunDir\screenshots\" -Force
+   ```
+2. Copy `report-template.md` → `$RunDir\report.md` and fill it:
+   - **§1 Summary** table (per-file PASS/FAIL/NOT-OBSERVED counts);
+   - **§2 Coverage** — the load-bearing section: **one `- [NN-F#] VERDICT — `screenshots/<file>.png` — note` line for ALL 187 functions.** PASS/FAIL/PARTIAL need a screenshot; NOT-OBSERVED/BLOCKED need a one-line reason;
+   - **§3 Fix backlog** — every FAIL as a P1/P2/P3 item with `[NN-F#]`, observed/expected, the **likely component file** (from the checklist's 🚩 watch-point or the page route), a **concrete fix**, and its screenshot.
+3. **Run the gate — the review is NOT done until it passes:**
+   ```
+   & ".venv\Scripts\python.exe" "<repo>\scripts\verify_review_report.py" "$RunDir\report.md" --require-screenshots
+   ```
+   It prints `X/187 covered` and lists any function missing a verdict or proof. If it
+   exits non-zero, go back and cover the gaps — do NOT report success. Only when it
+   prints `PASS` is the review complete.
+4. Tell the user the run folder path and **`SendUserFile`** the key failing
+   screenshots from `$RunDir\screenshots\` as proof.
 
 ### 8. Teardown (drop the dedicated DB — nothing left behind)
 1. `browser_close()`.
