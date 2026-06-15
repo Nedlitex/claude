@@ -1,11 +1,13 @@
 ---
 name: review-plan
-description: "Run 10 parallel reviewers (robustness, cleanness, understandability, testability, efficiency, angry engineer, CS professor, librarian, integration engineer, lint maniac) against a plan or code."
+description: "Run 11 parallel reviewers (robustness, cleanness, understandability, testability, efficiency, angry engineer, CS professor, librarian, integration engineer, lint maniac, parallel-execution architect) PLUS a second-phase Devil's Advocate that challenges the plan's premise and proposes better designs, against a plan or code."
 ---
 
-# /review-plan — 10-Angle Review
+# /review-plan — 11-Angle Review + Devil's Advocate
 
-Run 10 parallel Reviewer agents against a **plan file** or **source code**. Includes specialized reviewers for security, code quality, documentation, E2E business logic, and type safety. Aggregate findings into a prioritized list of fixes.
+Run 11 parallel Reviewer agents against a **plan file** or **source code**, then a **12th reviewer — the Devil's Advocate — in a second phase** that consumes the other 11's findings, challenges whether the plan's *approach itself* is right (not just its execution), and proposes concrete alternative designs. Aggregate everything into a prioritized list of fixes plus a top-level premise verdict.
+
+**Two kinds of review, deliberately separated.** Reviewers 1–11 assume the goal/approach is correct and hunt for flaws *inside* it (execution review). The Devil's Advocate does the opposite — it asks "is this the right thing to build at all?" (premise review). The most expensive mistakes are not bugs in the chosen approach; they are choosing the wrong approach competently. Running the Devil's Advocate *after* the 11 lets it treat their scattered execution-complaints as **symptoms** of a possibly-wrong premise.
 
 ## Usage
 
@@ -25,9 +27,9 @@ Run 10 parallel Reviewer agents against a **plan file** or **source code**. Incl
 
 ## Execution
 
-### Step 1: Launch 7 reviewers in parallel (single message, multiple Agent tool calls)
+### Step 1: Launch the 11 execution reviewers in parallel (single message, multiple Agent tool calls)
 
-Each reviewer is a `subagent_type: Reviewer` with `run_in_background: true`.
+Each reviewer is a `subagent_type: Reviewer` with `run_in_background: true`. (The 12th — the Devil's Advocate — is NOT launched here; it runs in Step 3 after these complete, because it consumes their findings.)
 
 Adapt prompts based on review mode. Use `{target}` as placeholder — either "the plan at `{path}`" or "the code at `{path}` (read the files)".
 
@@ -151,11 +153,67 @@ Adapt prompts based on review mode. Use `{target}` as placeholder — either "th
 >
 > Rate each issue: REJECT (type error that would cause runtime failure), UNSAFE (type warning that masks a potential bug), SLOPPY (missing annotation that reduces IDE support). Must find at least 5 issues. End with CLEAN / NOT-CLEAN verdict.
 
-### Step 2: Wait for all 10 reviewers to complete
+**Reviewer 11 — "The Parallel-Execution Architect" (Maximize SWE Concurrency):**
+> You are a delivery-flow architect obsessed with **wall-clock time**. You know each SWE agent run takes 15–90 minutes, so a plan that serializes 6 independent stages costs 6× the time of one that parallelizes them. Your job is to ensure the plan extracts the **maximum possible parallelism** without violating correctness, AND to propose the **concrete parallel execution flow** the Lead should follow.
+>
+> Read `~/.claude/CLAUDE.md` "Parallel Execution" section first — it is the authoritative protocol (worktree isolation mandatory, file allowlists per agent, single message multi-Agent fire, Lead merges sequentially). Your review enforces it on this plan.
+>
+> **In plan review mode** (primary):
+> 1. **Build a dependency DAG over stages.** For each stage, list (a) files it writes, (b) files it reads but does not write, (c) prior stages whose *outputs* it consumes. A stage depends on another ONLY if it reads files the other writes, or reads schema/contract the other establishes. Co-location in the doc is NOT a dependency.
+> 2. **Flag false sequencing.** If Stage N is listed after Stage M but their file sets are disjoint and N does not consume M's output, that is a REJECT — the plan is artificially serial. Propose moving N to run in parallel with M.
+> 3. **Detect file overlap that blocks parallelism.** For every pair of stages proposed to run in parallel, check that their write-sets are disjoint. If two stages both modify `src/foo.py`, they cannot parallelize — either split the file, split the stage, or serialize. Flag this as a REJECT and propose the split.
+> 4. **Demand explicit file allowlists per stage.** Every stage MUST declare "files I will write" and "files I must NOT touch." Without an allowlist, parallel SWE agents collide. If a stage lacks an explicit file list, REJECT.
+> 5. **Demand worktree isolation for every parallel SWE.** Per CLAUDE.md, `isolation: "worktree"` is MANDATORY for parallel SWE invocations. If the plan does not specify worktree isolation for parallel stages, REJECT.
+> 6. **Identify the critical path.** Compute the longest dependency chain through the DAG. The total wall-clock floor = sum of critical-path stage durations. Stages NOT on the critical path are free parallelism — they should run alongside critical-path work. If the plan does not exploit this, REJECT.
+> 7. **Watch for sweeping-rename traps.** Per CLAUDE.md: a rename touching N files across the repo cannot parallelize with any stage that edits those files. If such a sweep exists, it must run serially after the parallel rounds, or be split into per-module renames. Flag any plan that schedules a wide rename concurrently with edits to the same files.
+> 8. **Watch for shared-DB pollution.** Per project memory (`project_parallel_swe_shared_db_pollution.md`), concurrent pytest sessions against the shared test DB cause FK flakes. If parallel SWE stages both run the full test suite against `edu_test`, flag a REJECT and propose per-agent narrow test selection (`scripts/smart_test.py --files <allowlist>`).
+> 9. **Watch for plan-of-record instability.** If two parallel stages both depend on a schema/contract that is itself being changed in a third (uncompleted) stage, they will diverge. Schema/contract-defining stages MUST land before dependents fire in parallel.
+> 10. **Propose the concrete parallel execution flow.** Output a "Parallel Execution Flow" section with:
+>     - **Rounds** numbered R1, R2, R3… Each round = a set of stages that fire in a single Lead message via parallel Agent calls with `isolation: "worktree"`.
+>     - For each stage in each round: the file allowlist + forbidden list.
+>     - Between rounds: which branches Lead merges (sequentially) before the next round fires.
+>     - Estimated wall-clock per round (use 30 min per SWE call as the heuristic unless the plan specifies otherwise) and the total critical-path time vs the naive serial time. Quantify the speedup (e.g., "Naive serial: 7×30=210 min. Parallel: 3 rounds at 30 min critical-path each = 90 min. 2.3× speedup.").
+> 11. **Validate the SWE briefing.** Per CLAUDE.md "Don't delegate understanding," each parallel SWE prompt must include explicit file paths, line numbers, and what specifically to change — not "do stage N from the plan." If the plan does not pre-write per-stage SWE briefings (or at least specify them precisely enough that Lead can produce them in <1 min), flag as GAP.
+>
+> **In code review mode** (secondary): inspect the changed files and the actual git/worktree history. If the work was done serially when it could have been parallel, flag as a process gap. If concurrent SWE clobbered each other (per CLAUDE.md failure modes — stash conflicts, ruff-format reverts, AM-state leakage), flag the root cause.
+>
+> Rate each issue: REJECT (artificial serialization or unsafe parallelism — must fix), GAP (parallelism possible but not specified), NOTE (minor flow optimization). End with a **PARALLEL-READY / NOT-PARALLEL-READY** verdict AND the proposed Parallel Execution Flow (rounds, allowlists, merge order, speedup estimate). Must propose at least one concrete speedup or explain why the plan is already optimal.
 
-### Step 3: Aggregate findings
+### Step 2: Wait for all 11 reviewers to complete
 
-Read all 10 reviewer outputs. Create a unified summary. REJECTs from the Angry Engineer, CS Professor, Librarian, Integration Engineer, and Lint Maniac are automatically Critical-priority:
+### Step 3: Devil's Advocate pass (Reviewer 12 — runs AFTER, consumes the 11 outputs)
+
+Launch ONE more `subagent_type: Reviewer` (foreground or background — it is the only agent in this phase). **Its prompt MUST include a condensed digest of the other 11 reviewers' findings** (the deduplicated issue list you are about to build, or at minimum each reviewer's verdict + top issues) so it can connect them into a root-cause premise challenge. This is the "work with the other reviewers" mechanism — the Devil's Advocate is not a 12th parallel angle, it is a synthesizer that stands on the other 11.
+
+**Reviewer 12 — "The Devil's Advocate" (Contrarian Architect / Premise Challenger):**
+> You are a contrarian principal architect. The other 11 reviewers critiqued this plan's **execution** — they assumed the goal and approach are correct and hunted for flaws inside it. **Your job is the opposite: challenge the PREMISE.** Ask not "is this plan built well?" but "is this the right thing to build at all?" The most expensive mistakes are not bugs in the chosen approach — they are choosing the wrong approach competently.
+>
+> You are given (a) {target}, and (b) the aggregated findings of the other 11 reviewers (included below). **USE their findings as evidence.** Where multiple reviewers flag complexity, friction, special-cases, or workarounds clustered around the SAME area, treat that as a **symptom** that the underlying approach may be wrong — name the root cause and the alternative that would dissolve the symptom (e.g., "5 reviewers flag the per-user-role migration fold; that complexity is a symptom that RBAC composes badly — a relationship/policy model would make it vanish, not just fix it").
+>
+> **Method — steelman, THEN attack (mandatory order, do not skip the steelman):**
+> 1. **Steelman.** In 2–3 sentences, state the strongest honest case FOR the plan's chosen approach. If you cannot construct one, say so and why.
+> 2. **Attack the premise** along the axes that actually bite here (don't force all of them):
+>    - **Build-vs-buy / build-vs-integrate.** Is the plan reinventing a commodity or industry-standard component (auth/identity/PIM, queue, cache, workflow engine, search index, feature flags, policy engine)? Name the standard tool/protocol it reimplements and what *owning it forever* costs (maintenance, security surface, non-differentiating toil).
+>    - **Wrong layer / wrong abstraction.** Is this solved at the app layer when it belongs in infra / platform / IdP / DB? Is a bespoke mechanism standing in for a primitive the platform already provides?
+>    - **Industry standard ignored.** What is the *actual* prevailing pattern for this class of problem? Cite concrete patterns/tools/standards. Where does the plan diverge, and is the divergence a deliberate, justified choice or just unawareness?
+>    - **Scaling against the stated future.** Read CLAUDE.md and the plan's Context/goals. Stress the plan against the project's OWN forward-looking requirements. Does it paint into a corner the team must later re-migrate out of? What does it foreclose?
+>    - **Simpler 80/20.** Is there a materially simpler design delivering ~80% of the value for ~20% of the cost/risk? Is the plan over-engineered for its current need (speculative generality) OR under-powered for its stated future need (false economy)? Both are failures.
+>    - **Two-year regret test.** Name the single thing most likely to be regretted in 2 years. Which decisions are irreversible (schema, public API, data model, security boundary) vs reversible — and are the irreversible ones getting proportionate scrutiny?
+> 3. **Propose, don't just criticize.** Present **at least one concrete alternative design** with an honest tradeoff table (plan's approach vs each alternative: build cost, risk, time-to-value, what it enables, what it forecloses). Name real tools/patterns. If — after genuinely stress-testing it — the plan's approach is actually right, **SAY SO and explain why each alternative loses.** A steelman that survives the attack is a valid, valuable outcome; do NOT manufacture a contrarian verdict for its own sake.
+>
+> **Rules:** Specific and honest, never performatively negative. No vague "have you considered…" — every challenge names the alternative and its concrete tradeoff. Ground every claim in the plan text, CLAUDE.md, and the other 11 reviewers' findings. You may be wrong about execution minutiae (the other 11 own those) — your value is the premise and the alternative.
+>
+> Rate each premise-challenge: **REPLACE** (the approach is wrong; a named alternative is clearly better — blocks), **RECONSIDER** (the approach is defensible but a named alternative deserves a real decision before committing — surface to the user as a fork), **SOUND** (this aspect survives the steelman-attack). End with an overall verdict: **KEEP-APPROACH / FORK-DECISION-NEEDED / REPLACE-APPROACH** — and if not KEEP, the single alternative you'd put in front of the user, with its tradeoff and your recommendation.
+
+### Step 4: Aggregate findings
+
+Read all 11 reviewer outputs **plus the Devil's Advocate's premise review**. Create a unified summary. REJECTs from the Angry Engineer, CS Professor, Librarian, Integration Engineer, Lint Maniac, and Parallel-Execution Architect are automatically Critical-priority.
+
+**The Devil's Advocate's verdict is surfaced FIRST, as its own top-level section — above the execution fix-list** — because a premise problem outranks any execution fix (there is no point polishing the execution of a wrong approach). Specifically:
+- If the Devil's Advocate returns **REPLACE-APPROACH** or **FORK-DECISION-NEEDED**, present its steelman + challenge + alternative tradeoff table prominently, and in Step 5 ask the user the **fundamental-direction question FIRST** (keep approach vs adopt alternative) BEFORE asking which execution fixes to apply. Resolving the premise may moot or reshape large parts of the fix-list.
+- If **KEEP-APPROACH**, state that the approach survived an adversarial premise review (a genuine signal of confidence) and proceed to the normal fix-list.
+
+The Parallel-Execution Architect's **proposed Parallel Execution Flow** is also presented as its own section (rounds, allowlists, merge order, speedup) — the user reviews this alongside the issue list:
 
 1. **Deduplicate** — same issue found by multiple reviewers gets merged, noting which angles flagged it
 2. **Prioritize** — Critical > Major > Minor > Nitpick. Issues found by 2+ reviewers get bumped up one level
@@ -167,16 +225,17 @@ Read all 10 reviewer outputs. Create a unified summary. REJECTs from the Angry E
 
 4. Present the aggregated table to the user
 
-### Step 4: Ask user which fixes to apply
+### Step 5: Ask user which fixes to apply
 
-Use AskUserQuestion to confirm which categories to apply, then update the plan file with resolutions.
+Use AskUserQuestion. **If the Devil's Advocate flagged FORK-DECISION-NEEDED or REPLACE-APPROACH, ask the fundamental-direction question FIRST** (e.g., "Keep the planned approach, or adopt <named alternative>?") with the tradeoff in the option descriptions — because the answer reshapes the fix-list. Then confirm which execution-fix categories to apply, and update the plan file with the resolutions (including, if the user adopts an alternative or a fork, a short "Premise review" / "Alternatives considered" section recording the decision and why).
 
 ## Notes
 
-- Each reviewer runs in ~2-3 minutes
-- All 10 run in parallel so total wall time is ~3 minutes
-- Reviewers are read-only — they never edit the plan
-- REJECTs from the Angry Engineer, CS Professor, Test Tyrant, Librarian, Integration Engineer, AND Lint Maniac are treated as blockers
+- Reviewers 1–11 run in parallel (~2–3 min). The Devil's Advocate (Reviewer 12) runs in a SECOND phase, after the 11, because it consumes their findings — budget one extra short pass (~2 min).
+- Reviewers are read-only — they never edit the plan.
+- The Devil's Advocate challenges the PREMISE (is this the right approach?), not the execution (the other 11 own that). A **KEEP-APPROACH** verdict after a genuine steelman-then-attack is a valuable positive signal, not a wasted pass — it means the approach survived adversarial scrutiny. A **REPLACE-APPROACH** / **FORK-DECISION-NEEDED** verdict is a Critical blocker and is resolved with the user BEFORE the execution fix-list.
+- REJECTs from the Angry Engineer, CS Professor, Test Tyrant, Librarian, Integration Engineer, Lint Maniac, AND Parallel-Execution Architect are treated as blockers
+- The Parallel-Execution Architect's proposed flow (rounds, allowlists, merge order, speedup vs naive serial) is surfaced even when there are no REJECTs — it becomes the execution playbook the Lead follows when delegating to SWE
 - The CS Professor's FAIL ratings are treated as Major-priority (should fix before implementation)
 - The Test Tyrant's "no test = REJECT" rule applies to ALL public code in code review mode
 - The Librarian's OUTDATED rating means docs must be updated before merge
