@@ -1,6 +1,6 @@
 ---
 name: review-admin-ui
-description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and a DEDICATED review database `edu_ui_review` (EDU_TEST_MODE=1, so nothing leaks into the dev `edu`, the pytest `edu_test`, or prod DB) — recreated pristine BEFORE the run and dropped AFTER, so it never collides with a running test suite. Runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
+description: Run the full admin-portal QA checklist (docs/qa/admin-ui-checklist/) in a REAL Chromium browser via the Playwright MCP server, against an ISOLATED stack — a free port pair (never the default 3000/8000) and a DEDICATED review database `edu_ui_review` (EDU_TEST_MODE=1, so nothing leaks into the dev `edu`, the pytest `edu_test`, or prod DB) — recreated pristine BEFORE the run and dropped AFTER, so it never collides with a running test suite. SEEDS the DB (scripts/seed_admin_ui_review.py) so pagination/filter/detail tests are executable, runs super-admin steps FIRST so the run self-creates its admin user + .pem prerequisite, then walks every tab's function blocks across EN/中文 and phone/desktop, and writes a Claude-feedable findings report to .tracking/ui-reviews/. Use when the user asks to "run the admin UI review", "execute the QA checklist in a browser", "audit the admin UI quality", or "review-admin-ui".
 ---
 
 # review-admin-ui
@@ -116,6 +116,22 @@ $env:EDU_TEST_DB = "edu_ui_review"
 the freshly-recreated DB the wipe is a no-op and it just seeds. (`review_db.py check`
 reports row counts without mutating.)
 
+### 5c. Seed the review DATA (so the checklist tests are executable)
+An empty portal can't exercise pagination/filter/detail tests. Populate the DB with
+the state every checklist needs (≥1 page of users/tasks/logs/files/exams/etc., every
+filter value, rich detail entities) — the spec is `docs/qa/admin-ui-checklist/SEED-SPEC.md`:
+```
+$env:EDU_TEST_DB = "edu_ui_review"
+& ".venv\Scripts\python.exe" "<repo>\scripts\seed_admin_ui_review.py"
+```
+It prints the per-entity counts it inserted (~400 rows). It refuses any DB but the
+review/test DB. Re-runnable only on a fresh DB (recreate first); it is not idempotent.
+A few surfaces are filled by the BACKEND on boot, not this seed — config rows, the
+prompt catalog, the 6 agents + qgen pipeline, and the active automations — so those
+tabs already have data. (Config-revision history, an active prompt revision, and a
+draft automation are the only "empty by default" extras; create them through the UI
+during the review if you want to exercise rollback / active-revision / Enable.)
+
 ### 6. Drive the review IN THIS ORDER (self-seeding)
 
 Core browser loop for every interaction: `browser_snapshot` (get refs) → act
@@ -218,6 +234,10 @@ stray connection lingers; run it after step 2 to be clean.)
   are the exact things to check. If you find a function in the UI the checklist
   doesn't cover, note it in the report (and it should be added to the matrix —
   CLAUDE.md Admin Portal Rules + `tests/architecture/test_admin_ui_checklist_coverage.py`).
+- **If a tab is empty when it shouldn't be**, the seed is missing that state — note it
+  in the report and extend `scripts/seed_admin_ui_review.py` + `SEED-SPEC.md` (the
+  seed arch test keeps it honest). The seed deliberately skips what the backend
+  boot-seeds (config, prompt catalog, agents/pipelines, active automations).
 - **Headful/headless, viewport, output-dir** are pinned in `.mcp.json` (shared with
   `verify-admin`); change them there, not per-call. If Chromium is missing:
   `cd src/frontend/admin && pnpm exec playwright install chromium`.
