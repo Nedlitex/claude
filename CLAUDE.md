@@ -182,6 +182,11 @@ When spawning a subagent via the Agent tool:
 - ESLint / ruff-format auto-fix on stale state from another agent's edits.
 - **Worktree auto-cleanup loses uncommitted work.** A worktree with NO commits on its branch is cleaned when the agent ends. An SWE that worked for 27 minutes without committing, got confused by a path-inspection bug, and stopped — produced zero artifacts and zero recoverable state. Mitigation is on the Lead side (every SWE briefing must specify "commit early, commit often, ≥5 commits per stage") and on the SWE side (see `~/.claude/agents/SWE.md` § Commit Discipline).
 - **Path confusion across checkouts.** Worktree-isolated SWE has pwd in a worktree path; absolute repo-root paths (`D:\edu\…`, `/home/user/project/…`) point at the MAIN checkout, NOT the worktree. SWEs that use `cmd /c type D:\edu\…` or `Get-Content D:\edu\…` to "verify their edits" see the main-checkout content (pre-stage state) and misdiagnose it as "my changes are being reverted." Mitigation: SWE briefings must explicitly forbid absolute-root-path file inspection. Use `Read`, `git status`, `git diff` — those resolve against the worktree.
+- **`git worktree remove --force` FOLLOWS a junction/symlink and deletes its TARGET.** A worktree needs the project's virtualenv, and the cheap way to get one is a link to the main checkout's (`mklink /J .venv D:\proj\.venv`, or `ln -s`). Reaping that worktree then destroys the SHARED venv — every parallel agent dies at once, and the cause looks like anything but the cleanup command. Observed on stock 2026-07-21: destroyed once, then a link appeared in ALL FOUR worktrees of the next dispatch. **Mandatory before every `git worktree remove`:** check each candidate directory (`.venv`, `vendor`, `node_modules`) and unlink any reparse point FIRST — on Windows `cmd //c rmdir "<path>"` removes the link without recursing; `rm -rf` from Git Bash follows it and is exactly the wrong tool. Verify the target survived (count entries) before removing the worktree.
+  ```bash
+  fsutil reparsepoint query "<path>" >/dev/null 2>&1 && cmd //c rmdir "<path>"   # Windows
+  ```
+- **Parallel worktrees usually SHARE one test database.** Test harnesses commonly derive the DB name from the project name plus an xdist worker suffix that is EMPTY outside xdist — so every worktree targets the same database. One agent adding a migration stamps the shared `alembic_version`, and every other agent's suite then dies at COLLECTION with `Can't locate revision identified by '<rev>'`. It reads as a local problem and the obvious fix (downgrade or re-stamp) breaks the other agents mid-flight. **Fix: give each agent its own DB via the worker-suffix env var** (`PYTEST_XDIST_WORKER=gwNN`), and tell them to DROP it when done. Do NOT use the project-name env var for this if it also namespaces advisory locks. Lead should propagate this to every parallel agent at dispatch, not after the first one hits it.
 
 **Parallel-fire pattern (Lead):**
 ```
@@ -268,6 +273,29 @@ AI output is untrusted until validated. Every plan involving AI-assisted work fo
 Plan → Generate → Verify → Iterate
 Never: Plan → Generate → Done
 ```
+
+### How to verify a fix (three rules, each learned by being burned)
+
+1. **Reintroduce the bug and watch the test go RED.** A regression test that passes
+   against the broken code is not a regression test — it is a comment that costs CI
+   time. This is the single cheapest check available and it catches the other two.
+   Commit the pair RED-then-GREEN so the proof lives in history.
+2. **Observation that mutates is not observation.** Verify through the REAL entry
+   point, unmodified. A probe wrapped around the subject can PERFORM the very thing
+   being tested — on stock 2026-07-21 a debug probe called `session.flush()` before
+   delegating, so the run proved a flush was load-bearing while appearing to prove it
+   unnecessary; the plain CLI still failed. If instrumentation is unavoidable, confirm
+   it performs no action the subject is being tested for.
+3. **A comment is an intention; only control flow is a control.** Never conclude a
+   guard exists because a docstring says so, or that a tool ran because it printed a
+   zero. Check the number that would change if it had not run — the count of files
+   analyzed, of rows updated, of tests selected. Tools that resolve their own
+   environment (type checkers, test selectors) report a clean result for the wrong
+   target as readily as for the right one.
+
+Corollary for reviews: state which findings you CONFIRMED by execution and which are
+reasoned-but-unproven. A plausible finding that does not reproduce costs more to chase
+than it saves.
 
 ### Validation Script
 
