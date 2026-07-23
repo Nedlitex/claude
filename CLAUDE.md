@@ -292,6 +292,27 @@ Never: Plan → Generate → Done
    analyzed, of rows updated, of tests selected. Tools that resolve their own
    environment (type checkers, test selectors) report a clean result for the wrong
    target as readily as for the right one.
+4. **"Flaky" is a to-do, not a verdict.** Every intermittent failure has a
+   deterministic cause; the variability is in the TRIGGER's timing (test order, a
+   leaked global/env, a load-dependent interleaving), never in whether the bug exists.
+   "Passes alone, fails in the suite" = real cross-test pollution, deterministic given
+   the leaker + ordering. A concurrency test that fails ONLY under load is WORKING —
+   the race handling is broken and load selected the losing interleaving; chase it
+   hardest, never quarantine it. On 2026-07-22 a whole class of "flaky"/"provisioning
+   race" failures were deterministic: a partial env-leak that failed EVERY `AppConfig()`
+   (the tell was the exact count + whole-files-failing-together — a race scatters,
+   a deterministic setup failure clusters), plus two real upstream race bugs the
+   concurrency "flakes" had been hiding for weeks. What converts flaky→root-cause:
+   capture REAL tracebacks (not `--tb=no`), INSTRUMENT rather than theorize, and
+   classify isolated-vs-parallel to prove pollution.
+5. **A test that mocks the underlying op with hand-written "correct" behavior asserts
+   the mock, not the code — worse than no test.** Drive the REAL entry point on EVERY
+   side (real API call, real service/DAL method), pre-seed via the real path too.
+   Asymmetry is the tell (one side real, one side faked). On 2026-07-22 a concurrency
+   test whose delete side hit the real API but whose upload side hand-rolled a DB
+   insert proved nothing; rewriting the upload to the real code path immediately
+   surfaced a genuine upstream orphan bug. If the real entry point is awkward (async,
+   streaming, multi-step), drive the real CODE it calls, never a copy of its logic.
 
 Corollary for reviews: state which findings you CONFIRMED by execution and which are
 reasoned-but-unproven. A plausible finding that does not reproduce costs more to chase
