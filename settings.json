@@ -1,12 +1,37 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(poetry export:*)",
-      "Bash(dir:*)"
-    ]
-  },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
-  "effortLevel": "max"
+  "permissions": {
+    "allow": [
+      "Bash(poetry export:*)",
+      "Bash(dir:*)",
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(node -e \"const t=require\\('./tsconfig.json'\\);console.log\\(JSON.stringify\\(t.include\\),JSON.stringify\\(t.exclude\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "D:\\daily_dose_base",
+      "D:\\daily_dose_of_ai",
+      "D:\\daily_dose_base\\src",
+      "D:\\daily_dose_of_ai\\src"
+    ]
+  },
+  "enabledPlugins": {
+    "claude-smart@reflexioai": true
+  },
+  "extraKnownMarketplaces": {
+    "reflexioai": {
+      "source": {
+        "source": "github",
+        "repo": "ReflexioAI/claude-smart"
+      }
+    }
+  },
+  "effortLevel": "high",
+  "skipDangerousModePermissionPrompt": true,
+  "inputNeededNotifEnabled": true,
+  "agentPushNotifEnabled": true,
+  "model": "opus[1m]"
 }
