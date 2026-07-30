@@ -27,6 +27,30 @@ Run 11 parallel Reviewer agents against a **plan file** or **source code**, then
 
 ## Execution
 
+### Step 0: Plan-Concreteness Gate (plan-review mode only — BLOCKING, runs BEFORE the committee)
+
+A vague plan must **never reach** the 11 reviewers — they review *inside* a plan's claims
+and will fill its gaps with their own assumptions, so a plan of vague directives sails
+through while hiding unsolved design. Catch it first. Read the plan and check, against
+`~/.claude/CLAUDE.md` § Plan Quality Requirements:
+
+1. **Concrete code** — does every load-bearing step show the actual file + function + a
+   before→after (or faithful sketch), or are there bare directive verbs ("wire / handle /
+   integrate / support / fix X") with no code?
+2. **Traced flow + hidden dependencies** — does the plan follow the chain to real edits, or
+   does a step "just wire X" while the thing X needs (a context, a type, unbuilt machinery)
+   is never mentioned? Pick the single hardest step and ask "could an SWE do THIS without
+   inventing a design the plan omitted?" If no → the plan hid the real work.
+3. **Executable checklist** — discrete `file/function + exact change + RED→GREEN test`
+   steps, or prose paragraphs mixing problem + vague fix?
+4. **Success criteria** — observations that differ on failure, or goal restatements?
+
+**If it fails any check, STOP.** Do NOT launch the committee. Return the plan to the
+Planner/author with the specific vague steps quoted and what concrete code/flow each needs.
+Spending 12 review agents on a plan that isn't concrete enough to execute is the waste this
+gate exists to prevent — and letting such a plan pass is the exact failure this whole
+review is meant to make impossible. Only a plan that CLEARS Step 0 proceeds to Step 1.
+
 ### Step 1: Launch the 11 execution reviewers in parallel (single message, multiple Agent tool calls)
 
 Each reviewer is a `subagent_type: Reviewer` with `run_in_background: true`. (The 12th — the Devil's Advocate — is NOT launched here; it runs in Step 3 after these complete, because it consumes their findings.)
@@ -208,6 +232,12 @@ Launch ONE more `subagent_type: Reviewer` (foreground or background — it is th
 ### Step 4: Aggregate findings
 
 Read all 11 reviewer outputs **plus the Devil's Advocate's premise review**. Create a unified summary. REJECTs from the Angry Engineer, CS Professor, Librarian, Integration Engineer, Lint Maniac, and Parallel-Execution Architect are automatically Critical-priority.
+
+**Plan-concreteness is an auto-blocker (plan mode).** If Step 0 was borderline-passed, or any
+reviewer flags that a load-bearing step lacks concrete code / hides an unsolved design
+problem / is a vague directive with no traced flow (per `~/.claude/CLAUDE.md` § Plan Quality
+Requirements), treat it as **Critical / NOT-READY** regardless of the other verdicts — a plan
+that reads well but cannot be executed without re-deriving the design has NOT passed review.
 
 **The Devil's Advocate's verdict is surfaced FIRST, as its own top-level section — above the execution fix-list** — because a premise problem outranks any execution fix (there is no point polishing the execution of a wrong approach). Specifically:
 - If the Devil's Advocate returns **REPLACE-APPROACH** or **FORK-DECISION-NEEDED**, present its steelman + challenge + alternative tradeoff table prominently, and in Step 5 ask the user the **fundamental-direction question FIRST** (keep approach vs adopt alternative) BEFORE asking which execution fixes to apply. Resolving the premise may moot or reshape large parts of the fix-list.

@@ -28,6 +28,15 @@ YOU decide final severity — subagents may over/under-weight. YOU write the uni
 
 ## Review Checklist
 
+### Plan concreteness (when reviewing a `.tracking/plans/*.md` plan — a BLOCKER)
+Before critiquing the design, check the plan is executable at all (per `~/.claude/CLAUDE.md`
+§ Plan Quality Requirements): every load-bearing step has **concrete before→after code**
+(not a bare "wire/handle/integrate/fix X"); the **flow is traced** so no step hides an
+unsolved design problem or unbuilt dependency; the checklist is discrete `file/function +
+change + RED→GREEN test` steps, not prose; success criteria are observations that differ on
+failure. A plan that reads well but an SWE could not execute without re-deriving the design
+is **NOT-READY** — say so first, before any inside-the-design findings.
+
 ### Security
 - No hardcoded secrets or credentials
 - Input validation on all external data

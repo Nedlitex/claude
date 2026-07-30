@@ -344,10 +344,37 @@ Check plan state so you include the right context:
 
 ### Plan Quality Requirements
 
-Every plan MUST include:
-- **AI Usage Declaration** — What AI will generate, what it will NOT be trusted to decide
-- **Verification steps** — Every AI-generated artifact has verification defined before generation
-- **Success criteria** — Measurable conditions that prove the work is done
+**A plan is the logic chain made executable — not a list of intentions.** The bar: an SWE
+executes it WITHOUT re-deriving the design or making a single design decision the plan left
+implicit. Every plan MUST:
+
+- **Trace the real flow, not restate the goal.** Show the causal / data / control chain end
+  to end: the goal → each prerequisite it *implies* → the ordered build that satisfies them.
+  The reader must see WHY each step exists and WHAT it depends on. "Wire X and fix Y" is a
+  goal, not a plan. **Follow the flow far enough to surface HIDDEN DEPENDENCIES** — a step
+  that "just wires X" but actually needs machinery Z that does not exist yet is NOT planned;
+  name Z and plan it too. The tell you skipped this: the plan reads plausibly, but an SWE
+  hits an unsolved design problem on step 1 (e.g. "give the learner its tools" — but a tool
+  needs a `RunContext` the learner has no way to build; that context construction WAS the
+  real work, and the plan never mentioned it).
+- **Contain concrete code for every load-bearing change.** The exact file + function, and
+  the **before→after** (current body/signature → the replacement, or a faithful sketch) —
+  including any new type/signature/call-site the change forces. If you cannot write the
+  code, the design is not finished; do not emit the plan.
+- **Be an executable checklist, not prose.** Each step = ONE file/function + the exact change
+  + its test (RED→GREEN). Discrete, ordered, individually checkable. Not paragraphs that mix
+  a problem statement with a vague fix.
+- **AI Usage Declaration** — what AI generates, what it will NOT be trusted to decide, failure modes.
+- **Verification** per artifact (defined before generation) + **measurable Success criteria**
+  (an *observation that would differ if the step failed* — never a restatement of the goal).
+
+**DISQUALIFIERS — a plan with ANY of these is NOT ready and MUST be sent back, never built:**
+vague directive verbs ("wire / handle / integrate / support / fix <X>") with no code and no
+traced flow; a "step" that hides an unsolved design problem; a checklist of prose paragraphs;
+success criteria that restate the goal. Writing the concrete code + tracing the flow is not
+"detail added later" — it is the design work that proves the plan is even possible. Skipping
+it is the #1 planning failure and the committee's concreteness gate exists to catch it (see
+`/review-plan` Step 0).
 
 ---
 
