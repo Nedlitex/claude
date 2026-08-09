@@ -285,6 +285,65 @@ a user-reachable path as a defect, not as documentation.
 
 ---
 
+## UI quality bar — the 10 gates
+
+**Applies to every user-facing surface in every project.** Do not re-derive
+these per repo, and do not wait to be told them again.
+
+The canonical, exhaustive matrix is edu's `docs/qa/admin-ui-checklist/README.md`
+(one file per tab, ~200 functions, a seed spec and a verifier). Read it when
+building or reviewing a UI. Its brief is the whole standard:
+
+> **Audience: non-technical testers.** You do not need to read code, know the
+> database, or call an engineer. **If any step forces you to do those things,
+> that step is a FAIL.**
+
+Every button, field, filter, column and dialog must pass all ten, **in every
+language and on phone AND desktop**:
+
+| Gate | PASS means |
+|---|---|
+| **Q1 Readable** | Plain language. Anything non-obvious has help text, a hint or an example. A word you'd have to ask an engineer about is a FAIL. |
+| **Q2 No internal knowledge** | Never asks the user to TYPE an internal value (an id, a service name, a status code, a JSON blob) and never SHOWS one as the main content. |
+| **Q3 Pick, don't type** | Anything with a fixed set of choices is a picker/dropdown/chips — never free text. |
+| **Q4 Both languages** | Every visible string translated. Switch locales: nothing stays in the other language, nothing shows a raw key. |
+| **Q5 Non-tech usable** | A first-timer completes the task with only what is on screen. No docs, no CLI, no engineer. |
+| **Q6 Phone + desktop** | Works at 390×844 and wide. Nothing cut off or unreachable. |
+| **Q7 Robust** | Happy path shows clear success; bad/empty input is rejected gracefully. |
+| **Q8 Errors explained** | Errors say what is wrong and what to fix, in plain language. Never a raw server error, a stack trace, a bare code or "500". |
+| **Q9 No visual break** | No overlap, overflow, or broken layout — in EITHER language (CJK text length differs) and either size. |
+| **G10 Comprehensible form** | The primary task completes on the DEFAULT path. Any raw key / dotted path / JSON input lives behind a clearly-labelled **Advanced** disclosure, or does not exist. |
+
+### Four things that are not negotiable, and are cheap to enforce
+
+1. **A computed value is never round-tripped through a human.** If the server
+   can derive it, call the endpoint — do not ask the user to type what the
+   backend already knows. This is the single most common cause of a Q2/G10
+   failure, and the fix is usually an endpoint that already exists.
+2. **Never show a CLI command as the answer.** A UI that tells the user to run
+   a script has not implemented the feature (see the section above).
+3. **Localization is not "the strings are translated".** Three failures survive
+   a complete message file, and all three are greppable:
+   - a translated label carrying the English internal name — `搜索折（window_spec）`;
+   - a value with no target-language characters at all — a command, a raw
+     format like `XSHG:600519`, a placeholder;
+   - the **default locale** being the wrong one for the audience.
+4. **G10 needs a machine floor, not a reviewer's checkbox.** edu enforces it
+   with `scripts/lint_admin_form_comprehensibility.py` — a static lint over the
+   frontend source that fails on a raw-key/JSON input in the default path.
+   Every project with a UI should carry the equivalent. A gate that depends on
+   someone remembering is a gate that ships the bug.
+
+### Reviewing a UI
+
+Walk it in a **real browser**, every function × every language × phone and
+desktop, and take a screenshot per function as proof. A review that reads source
+and reasons about it is a source review; it does not discharge this bar. Report
+findings as a priority-ordered fix backlog keyed to the function, each naming
+the failing gate, observed vs expected, and the file to edit.
+
+---
+
 ## Journal Protocol (Lead Only)
 
 ### Session Start
