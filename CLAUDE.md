@@ -334,6 +334,40 @@ language and on phone AND desktop**:
    Every project with a UI should carry the equivalent. A gate that depends on
    someone remembering is a gate that ships the bug.
 
+### Plan-time gate — a UI plan must be checkable BEFORE it is built
+
+**A UI plan that does not say what a human sees cannot be reviewed against the
+10 gates, and a plan that cannot be reviewed will be reviewed after
+implementation — which is the expensive time to find out.**
+
+So: for **every** component, page, dialog and state the plan introduces, it must
+state, concretely enough to check:
+
+1. **What is on screen** — the actual labels, in the actual words a user reads,
+   in every locale. Not "a risk selector"; the three option labels and their
+   one-line descriptions. A field named only by its backing variable
+   (`risk_posture`, `embargo_days`) is not planned, it is deferred.
+2. **What the human does** — the gesture, in order: what they click, pick or
+   type, and what happens next. If any step is "type", say why it could not be
+   a pick (Q3).
+3. **What they see when it goes wrong** — the actual refusal sentence for each
+   reachable failure, not the status code. "422 on a bad range" is a backend
+   fact; the user sees a sentence, and that sentence is the deliverable (Q8).
+4. **What they see when there is nothing** — the empty state. Every list has
+   one, it is the first thing a new user meets, and it is the most commonly
+   unplanned screen in any UI.
+5. **Which gates each surface is claimed to pass**, so the reviewer checks a
+   claim rather than forms an opinion. Q1–Q9 + G10, per surface.
+
+The check applied to a plan: **pick the hardest screen and ask "could I sit a
+non-technical person in front of this description and predict what they do?"**
+If the answer needs the reader to open the code, the plan has described a data
+flow and called it a design. Mockups (ASCII, wireframe, or literal copy blocks)
+are the cheapest way to satisfy this and should be the default.
+
+A plan naming components and endpoints but no screens, labels or refusal
+sentences is **NOT READY** — send it back rather than committee-reviewing it.
+
 ### Reviewing a UI
 
 Walk it in a **real browser**, every function × every language × phone and

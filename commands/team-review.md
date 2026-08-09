@@ -44,6 +44,18 @@ through while hiding unsolved design. Catch it first. Read the plan and check, a
 3. **Executable checklist** — discrete `file/function + exact change + RED→GREEN test`
    steps, or prose paragraphs mixing problem + vague fix?
 4. **Success criteria** — observations that differ on failure, or goal restatements?
+5. **UI plans only — is it checkable against the 10 gates AT PLANNING TIME?** See
+   `~/.claude/CLAUDE.md` § *Plan-time gate*. For every screen the plan introduces it
+   must state: the actual on-screen labels in every locale (not the backing variable
+   name); the human's gesture, in order; the refusal SENTENCE for each reachable
+   failure (not the status code); the EMPTY state; and which of Q1–Q9/G10 the surface
+   is claimed to pass. The check: **pick the hardest screen and ask "could I sit a
+   non-technical person in front of this description and predict what they do?"** If
+   the reader must open the code to answer, the plan described a data flow and called
+   it a design. A plan naming components and endpoints but no screens, labels or
+   refusal sentences is NOT READY — a UI's whole deliverable is what a human sees,
+   and a plan that omits it has deferred the actual design to implementation, where
+   it will be made by whoever types fastest.
 
 **If it fails any check, STOP.** Do NOT launch the committee. Return the plan to the
 Planner/author with the specific vague steps quoted and what concrete code/flow each needs.
