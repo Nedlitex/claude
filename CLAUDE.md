@@ -246,6 +246,42 @@ Agent definition files contain only what differentiates that agent from others.
 | Validate before returning | No unchecked work crosses agent boundaries |
 | **NEVER install to system Python** | Always use the project's `.venv`. Use `.venv/Scripts/pip` (Windows) or `.venv/bin/pip` (Unix) explicitly. Bare `pip install` goes to system and is FORBIDDEN. |
 | **Read project docs before coding** | Read `CLAUDE.md`, `README.md`, and module-level READMEs before making changes. These contain project-specific rules, conventions, and constraints that MUST be followed. |
+| **"Not implemented" is NOT an implementation** | See below. Shipping a surface that announces its own absence is sloppiness, not honesty. |
+
+---
+
+## "Not implemented" is not an implementation
+
+**Never ship a UI, route, CLI command or API that exists only to say it does not
+work.** A page rendering *"this collection cannot be listed yet"*, a button that
+opens a *"coming soon"*, a route answering `501`, a `TODO` in place of a body —
+each of these is the ABSENCE of the feature wearing the feature's clothes. The
+user came to do something and leaves unable to do it, having spent a click
+finding out.
+
+This most often arrives dressed as a virtue. The reasoning goes: *the backend
+has no read route, so a table here would be dishonest — better to state the
+gap.* The honesty half is correct and the conclusion is wrong. **The fix for a
+missing read route is to write the read route**, in the same change. Stopping at
+the explanation converts a backend gap into a permanent scar in the product, and
+the note explaining why tends to outlive everyone who could have closed it.
+
+Concretely:
+
+- If a surface needs an endpoint that does not exist, **the endpoint is part of
+  the work.** Scope it in, or do not add the surface at all — an absent nav item
+  is honest; a nav item leading to an apology is not.
+- **Never add navigation to a dead end.** A route in the nav is a promise.
+- If it genuinely cannot be built now (an upstream dependency, a decision the
+  user must make), then **build nothing**, say so in the plan, and register the
+  gap where gaps are tracked. Do not leave a placeholder in the product.
+- A stub is acceptable only where the caller is a TEST and the stub is named
+  as one, never on a path a human can reach.
+
+The tell that this rule is being broken: a component, page or handler whose
+entire content is prose about what is missing. Grep for it — `NotImplemented`,
+`coming soon`, `not available yet`, `cannot be listed` — and treat every hit on
+a user-reachable path as a defect, not as documentation.
 
 ---
 
