@@ -497,10 +497,55 @@ implicit. Every plan MUST:
 - **Verification** per artifact (defined before generation) + **measurable Success criteria**
   (an *observation that would differ if the step failed* — never a restatement of the goal).
 
+#### The checklist is mandatory, and it must BIND to the steps
+
+**Every plan carries an explicit requirement checklist, and every item in it names the
+steps that satisfy it.** Not a summary written after the fact — the checklist is what the
+plan is CHECKED against, so it is worthless if it does not point at the work.
+
+The shape, at the top of the plan, before the stages:
+
+```
+| # | Requirement (what the owner asked for) | Satisfied by | Done when |
+|---|---|---|---|
+| C1 | Delete the tab bar; one front page  | S1 (nav.tsx deleted, NAV_ITEMS gone), S2 (front-page sections) | `nav.tsx` does not exist; `nav.test.tsx` deleted; walking the app reaches every surface from `/` |
+| C2 | …                                   | …            | … |
+```
+
+Two rules, and BOTH are rejection criteria:
+
+1. **No checklist ⇒ the plan is NOT READY.** Send it back. A plan whose requirements
+   live only in the owner's original message cannot be reviewed for coverage — the
+   reviewer ends up re-deriving the ask, which is exactly the failure the plan exists to
+   prevent.
+2. **A checklist item with no steps behind it ⇒ the plan is NOT READY.** "Delete all
+   tabs", "make it usable on a phone", "publish the winner" are GOALS. An item whose
+   *Satisfied by* column is empty, says "throughout", names a stage that does not
+   exist, or names a stage whose body never mentions it, is a **bare goal without a
+   how** — the single most common way a plan silently drops the thing it was
+   commissioned for. The item must name specific steps, and those steps must
+   independently contain the file + change + test.
+
+Check it in both directions before emitting a plan:
+
+- **Every owner requirement → a checklist row.** Read the original ask sentence by
+  sentence; anything asked for that has no row was dropped. If the requirement is being
+  declined or deferred, it still gets a row, marked as such with the reason — never
+  silent omission.
+- **Every checklist row → real steps.** Open each named step and confirm it does the
+  thing. A row pointing at a stage that merely *mentions* the requirement is unbound.
+- **A requirement that shapes the whole design must shape the whole PLAN.** If the ask
+  is "delete all tabs and keep one front page", a plan that spends eight stages building
+  out the tabbed destinations and closes with a one-paragraph summary stage has inverted
+  the ask. Position in the plan is a claim about what the work IS: the load-bearing
+  requirement is the spine, not the appendix.
+
 **DISQUALIFIERS — a plan with ANY of these is NOT ready and MUST be sent back, never built:**
 vague directive verbs ("wire / handle / integrate / support / fix <X>") with no code and no
 traced flow; a "step" that hides an unsolved design problem; a checklist of prose paragraphs;
-success criteria that restate the goal. Writing the concrete code + tracing the flow is not
+success criteria that restate the goal; **no requirement checklist at all**; **a checklist
+item that names no step, or names a step whose body does not do it**; **an owner requirement
+with no checklist row**; **the ask's central requirement demoted to a final summary stage.** Writing the concrete code + tracing the flow is not
 "detail added later" — it is the design work that proves the plan is even possible. Skipping
 it is the #1 planning failure and the committee's concreteness gate exists to catch it (see
 `/review-plan` Step 0).
