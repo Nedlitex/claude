@@ -115,8 +115,22 @@ will report green for the wrong tests).
    contracts, and watch the test fail behaviourally — not with an `ImportError`,
    which proves nothing. Commit the pair RED-then-GREEN so the proof is in
    history.
-3. **The full architecture suite** — `tests/architecture/`. ~150 gates; they are
-   the repo's accumulated scar tissue and they are fast.
+
+   **Never do that revert in a shared checkout.** `git checkout <old> -- <impl>`
+   STAGES the revert, and a concurrent agent's commit absorbs it — you lose the
+   implementation and nobody notices until the suite is green for the wrong
+   reason. Use a `git worktree`, a `git stash`, or a read-only diff against the
+   old blob. (Learned by losing work to exactly this.)
+3. **The full architecture suite** — `tests/architecture/`, **with `-n auto`**.
+   ~150 gates; they are the repo's accumulated scar tissue and they are fast in
+   parallel and NOT otherwise: single-process is about an hour, `-n auto` is
+   ~4m40s. Omitting the flag reads as a hang and has cost an hour more than once.
+
+   One caveat that survives the flag: the **prod-target family**
+   (`TestPerPhaseResolvesProd` / `TestProdRoutingEndToEnd`) is not xdist-safe and
+   produces a non-deterministic ERROR — *a different test each run* — from a
+   shared process-global. Run that family single-process, and if you accept an
+   error there, check WHICH test errored rather than shrugging at the count.
 4. **The affected module suites**, plus anything importing what you changed.
 5. **Type check and lint** exactly as pre-commit runs them. Check the ANALYZED
    FILE COUNT, never the zero — a type checker that resolved the wrong
