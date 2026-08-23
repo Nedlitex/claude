@@ -644,9 +644,29 @@ The rule, concretely:
 - **Expand every term the first time.** An acronym, an internal noun, a table
   name, a metric — one clause of plain English on first use. If you cannot
   expand it in a clause, you do not understand it well enough to plan it.
-- **No invented shorthand.** `G1`/`G2`, `D3`, `S7`, `U10` are fine as LABELS for
-  things already named in plain words; they are never the naming itself. A
-  sentence a reader can only decode by grepping is a defect.
+- **No invented shorthand — and NEVER in an identifier.** `D3`, `S7`, `U10` are
+  fine as LABELS in a document for things already named in plain words. They are
+  never the naming itself, and they must never reach a variable, field, column,
+  flag or config key. A sentence a reader can only decode by grepping is a
+  defect; an IDENTIFIER a reader can only decode by grepping is a defect that
+  ships and then persists for years.
+
+  **Measured, and the owner's words are the rule: *"`co_evolve_g2` is completely
+  opaque to a human, never name something like that again."*** That flag decided
+  whether the agent's self-critique method could improve. Nobody could tell that
+  from its name, so nobody turned it on — **off in all 29 runs that ever ran** —
+  and every reader of the tree believed the capability was live because the
+  machinery was right there. An opaque name is not a style problem; it is how a
+  capability goes unexercised for months.
+
+  Worse, the vocabulary it belonged to was **overloaded**: `G1` meant *the
+  magnitude range on a turn call* in one module and *the learner's methodology*
+  in another — 85 uses across the backend, one token, two meanings. A reader who
+  learns one is now confidently wrong about the other.
+
+  The test: **could a new engineer, or the owner, say what this name means
+  without opening another file?** If not, rename it. A boolean is named for what
+  turning it ON does — `improve_the_critic`, not `co_evolve_g2`.
 - **Describe behaviour, not machinery, wherever both would do.** "Runs out of
   money and stops cleanly, and you can resume after topping up" beats
   "classifies to `_DEPLETED` and writes `RunStatus.PAUSED`". The machinery still
