@@ -211,6 +211,25 @@ The cost of an unused parallel slot is one extra serial 30-min wait. The cost of
 6. **Test conventions** (project-specific — e.g., `scripts/smart_test.py` not bare pytest; `.venv/Scripts/python` on Windows).
 7. **Verification gates** the SWE must pass before final commit (pyright, smart_test, lint).
 8. **Report-back format**: list of commits, test results, any plan deviations.
+9. **COMMIT THE EVIDENCE — do not report it.** Every RED proof, before/after
+   measurement and number the agent quotes must be saved as a FILE in the repo
+   (`.tracking/changes/<date>-<stage>-BEFORE.txt` / `-AFTER.txt`), with the actual
+   terminal output pasted, not a summary. Artifacts are referenced by
+   **repo-relative** path; an absolute worktree path
+   (`…/.claude/worktrees/agent-<id>/…`) is dead on arrival.
+
+   **A worktree is deleted when its agent finishes, and the session transcript
+   goes with it.** Measured on stock 2026-08-23: six agents ran RED proofs, one
+   committed its transcripts (194 lines) and five described theirs in prose. The
+   five worktrees were reaped the same hour. Those proofs no longer exist — the
+   work is merged and green, and nobody can now tell a real RED from a claimed
+   one. The briefings said "report back", which is what produced it.
+
+   Corollary for Lead: **re-run at least one perturbation yourself at merge.** It
+   costs one command (revert the implementation, watch the test fail, restore) and
+   it is the only thing that distinguishes a regression test from a test that
+   passes either way. Doing this on stock 2026-08-23 caught a submission whose
+   five tests never imported the function they claimed to cover.
 
 Missing any of these in a briefing is a Lead failure. The harness will not save you; the SWE will follow the gaps in your prompt to a bad place.
 
