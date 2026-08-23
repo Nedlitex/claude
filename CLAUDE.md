@@ -251,6 +251,8 @@ Agent definition files contain only what differentiates that agent from others.
 | **NEVER install to system Python** | Always use the project's `.venv`. Use `.venv/Scripts/pip` (Windows) or `.venv/bin/pip` (Unix) explicitly. Bare `pip install` goes to system and is FORBIDDEN. |
 | **Read project docs before coding** | Read `CLAUDE.md`, `README.md`, and module-level READMEs before making changes. These contain project-specific rules, conventions, and constraints that MUST be followed. |
 | **"Not implemented" is NOT an implementation** | See below. Shipping a surface that announces its own absence is sloppiness, not honesty. |
+| **NEVER ship a capability default-OFF** | See below. A flag nobody turns on is the feature silently missing, with the extra cost of looking present. Ship it ON, or build nothing and register the gap. |
+| **A durable store is not built until it can be corrected** | See below. Write + read is half a store; a plan that adds one must state how an entry is fixed and how it is removed. |
 
 ---
 
@@ -286,6 +288,111 @@ The tell that this rule is being broken: a component, page or handler whose
 entire content is prose about what is missing. Grep for it — `NotImplemented`,
 `coming soon`, `not available yet`, `cannot be listed` — and treat every hit on
 a user-reachable path as a defect, not as documentation.
+
+---
+
+## Default-OFF is not shipping. It is the feature missing, in disguise.
+
+**You are NOT allowed to build a capability and land it behind a flag that
+defaults to OFF. Ship it ON, or build nothing and register the gap.** There is
+no third option, and "built but off" is the WORST of the three: it costs the
+full build, it produces none of the value, and — the part that makes it worse
+than doing nothing — **it reads as present**. Every later reader sees the flag,
+the code, the tests, and concludes the capability exists. Nobody re-opens a
+question they believe was answered.
+
+This is the same failure as the section above wearing a different costume. A
+page that says *"coming soon"* at least tells the user it is absent. A
+default-OFF flag tells everyone the opposite.
+
+**Measured, and this is why the rule exists.** stock's trainer shipped
+`co_evolve_g2` (the meta-agent evolving how it critiques itself — the stated
+*point* of the design) and `enable_significance_gate`, both behind flags,
+both defaulting to `False`, both with a documented plan to "settle it by a live
+experiment". **29 runs later, across three weeks, the flag had never once been
+`True`.** The experiment was never run. The value was never delivered. The code
+was maintained, type-checked, migrated and reviewed the whole time, and every
+reader of the tree — including agents reading it back months later — believed
+the system co-evolved, because the machinery was right there.
+
+### The three legitimate paths, and how to pick
+
+| Situation | What you do |
+|---|---|
+| It works and you believe in it | **Ship it ON.** This is the default. |
+| You are unsure it helps | **Run the experiment BEFORE merging**, then ship ON or delete. "We'll measure later" is how the flag becomes permanent. |
+| It genuinely cannot be decided now | **Build NOTHING.** Register the gap where gaps are tracked, with the decision that must be made and who makes it. |
+
+A flag is legitimate ONLY as an **operational** switch over a capability that is
+ON — a kill switch, a per-tenant rollout, a rate control. It is never a way to
+land unfinished or unvalidated work. The test: *if this flag never moves again,
+did the user get the thing they asked for?* If no, you have not shipped it.
+
+**Corollary — a flag that has never been ON in production is a defect, not a
+setting.** Grep for them. Any boolean gating a capability, defaulting off, with
+zero recorded true-valued runs, is either work that must be finished and turned
+on, or dead code that must be deleted. Leaving it is choosing to look finished.
+
+**Corollary — do not report it as done.** A completion report for work that
+landed default-OFF must say, in the first sentence, that the capability is not
+active and what turns it on. Saying "implemented" of something no run has ever
+executed is a false status report.
+
+---
+
+## A durable store is not built until it can be corrected
+
+**Any plan that adds a store an agent or a user writes to MUST state, before it
+is built: how an entry is corrected, how an entry is removed, and what happens
+to an entry that turns out to be wrong.** Write + read is half a store. A store
+that can only grow is not a memory — it is a log wearing a memory's name.
+
+Why this is its own rule rather than a review nicety: the missing half is
+**invisible on the happy path**. Every test passes, because every test writes a
+true thing and reads it back. The defect only appears the first time something
+stored turns out to be false — by which point the store is full, the callers are
+written, and the fix is an upstream change under load.
+
+**Measured.** stock's agent memory shipped as `save` / `search` / `list` with an
+`evict_over_cap` sweep, under a plan titled *"bare-minimum generic memory
+subsystem"*. Eleven reviewers plus a Devil's Advocate passed it and changed one
+thing (an index strategy). No reviewer asked what happens when a memory is
+wrong. Consequences, all live:
+
+- The agent **cannot correct or retract** anything. Its only move is to write a
+  second, contradicting entry — so the store accumulates contradictions, and
+  semantic search will surface the refuted claim as readily as the correction,
+  forever. Observed in the tree: the agent writing *"the May 18 call was
+  premature"* as a NEW row, with the wrong claim left standing.
+- The one deletion path, `evict_over_cap`, is **age-ordered FIFO** — so the
+  earliest and most-validated lessons are destroyed first, by age, with no
+  reference to whether they were right. That is anti-curation, and it LOOKS like
+  a removal path, which is how the gap stayed hidden.
+- The store's own best-practices doc listed **four invariants, all about writing
+  an entry correctly**, and none about an entry being wrong.
+
+### The checklist for any durable store
+
+State all six, in the plan, before building:
+
+1. **Create** — who writes, what scoping, what atomicity.
+2. **Read** — how it is retrieved, and what a miss means.
+3. **Correct** — how a wrong entry is fixed in place. If the answer is "write a
+   new one", say how a reader knows which supersedes.
+4. **Remove** — how the writer deletes deliberately. **Automatic eviction is not
+   removal** — it is truncation, and it must never be counted as the delete path.
+5. **Protect** — what must survive eviction, and who decides.
+6. **Carry** — does it cross runs / generations / forks? If a design deletes
+   another mechanism *because* this store will carry the knowledge, then the
+   copy step is load-bearing and belongs in the SAME plan, not a later one.
+
+Item 6 has its own scar: stock deleted a `trainer_meta_seed` table on the
+explicit promise that agent memory would carry knowledge forward, then stubbed
+the copy seam as a deliberate no-op "until the first memory writers land". The
+writers landed. 443 rows across 9 scopes. The copy was never built, and the
+learner's own prompt still tells it memory is *"durable, across runs"* — which
+is false. **A no-op stub with a trigger condition is a default-OFF flag with
+extra steps: see the section above.**
 
 ---
 
@@ -501,6 +608,43 @@ implicit. Every plan MUST:
 - **Verification** per artifact (defined before generation) + **measurable Success criteria**
   (an *observation that would differ if the step failed* — never a restatement of the goal).
 
+#### Write the plan in plain language. A reader should not need the codebase to follow it.
+
+**A plan is read by a human deciding whether to approve the work. If they cannot
+follow it without opening the source, it is not a plan — it is notes to
+yourself.** The owner is the audience, and the owner is not obliged to hold your
+vocabulary in their head.
+
+The rule, concretely:
+
+- **Say what it does before you say what it is called.** Not "wire
+  `co_evolve_g2` into `_child_genome`" — "let the agent keep the improved
+  version of how it critiques itself, instead of throwing it away each round
+  (the switch is `co_evolve_g2`)." Identifiers go in parentheses, after the
+  meaning, never instead of it.
+- **Expand every term the first time.** An acronym, an internal noun, a table
+  name, a metric — one clause of plain English on first use. If you cannot
+  expand it in a clause, you do not understand it well enough to plan it.
+- **No invented shorthand.** `G1`/`G2`, `D3`, `S7`, `U10` are fine as LABELS for
+  things already named in plain words; they are never the naming itself. A
+  sentence a reader can only decode by grepping is a defect.
+- **Describe behaviour, not machinery, wherever both would do.** "Runs out of
+  money and stops cleanly, and you can resume after topping up" beats
+  "classifies to `_DEPLETED` and writes `RunStatus.PAUSED`". The machinery still
+  appears — in the step, next to the file it lives in.
+- **Every stage opens with one sentence of why, in the owner's terms.** What
+  breaks today, and what the owner can do afterwards that they cannot do now.
+
+Concreteness and plain language are not in tension, and this rule does NOT relax
+the requirement for exact files, signatures and before→after code. Those live in
+the STEPS. The prose around them — the overview, the requirement checklist, each
+stage's opening, the success criteria — is for a human, and must read like it
+was written for one.
+
+**The check:** hand the plan to someone who has never opened this repository. If
+they cannot say what will be different when it is done, and why that matters,
+the plan is NOT READY — send it back before reviewing anything else.
+
 #### The checklist is mandatory, and it must BIND to the steps
 
 **Every plan carries an explicit requirement checklist, and every item in it names the
@@ -536,6 +680,19 @@ Check it in both directions before emitting a plan:
   sentence; anything asked for that has no row was dropped. If the requirement is being
   declined or deferred, it still gets a row, marked as such with the reason — never
   silent omission.
+  **Check the row against the OWNER'S words, never against the plan's paraphrase.**
+  This is the failure mode that defeats every other gate here: the plan restates
+  the ask in its own vocabulary, and then the checklist, the disqualifiers and the
+  committee all validate against the RESTATEMENT and pass. "Memory, so the agent
+  carries what it learns across its whole life" became "a memory subsystem:
+  save/search/list", and the plan satisfied its own paraphrase — eleven reviewers
+  deep. Quote the owner's sentence in the row. A gate whose measurement excludes
+  the failure mode is a green light, not a weak gate.
+  **"Bare-minimum", "v1" and "phase 1" in a plan title are not scopes — they are
+  scope CUTS, and a cut is only legitimate written down.** A plan using one of
+  those words must carry an explicit list of what is deferred and the condition
+  that brings it back. Without that list the words mean "I stopped here", which
+  no reviewer can check.
 - **Every checklist row → real steps.** Open each named step and confirm it does the
   thing. A row pointing at a stage that merely *mentions* the requirement is unbound.
 - **A requirement that shapes the whole design must shape the whole PLAN.** If the ask
@@ -547,7 +704,7 @@ Check it in both directions before emitting a plan:
 **DISQUALIFIERS — a plan with ANY of these is NOT ready and MUST be sent back, never built:**
 vague directive verbs ("wire / handle / integrate / support / fix <X>") with no code and no
 traced flow; a "step" that hides an unsolved design problem; a checklist of prose paragraphs;
-success criteria that restate the goal; **no requirement checklist at all**; **a checklist
+success criteria that restate the goal; **no requirement checklist at all**; **any capability landed behind a default-OFF flag**; **a durable store with no correction/removal path**; **prose only a reader of this codebase could follow (unexpanded jargon, bare identifiers standing in for meaning)**; **a "bare-minimum"/"v1" scope with no written list of what was cut**; **a checklist
 item that names no step, or names a step whose body does not do it**; **an owner requirement
 with no checklist row**; **the ask's central requirement demoted to a final summary stage.** Writing the concrete code + tracing the flow is not
 "detail added later" — it is the design work that proves the plan is even possible. Skipping
