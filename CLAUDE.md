@@ -359,6 +359,48 @@ executed is a false status report.
 
 ---
 
+## A default is a decision nobody took, made permanent
+
+**A default value on a parameter, a flag or a column decides something. Whoever
+wrote it may have been guessing; every caller who omits the argument is now
+bound by that guess, and nothing in the call site records that a choice was
+made.** Where the decision matters — money, correctness, a status that means
+"this was verified" — the default is the wrong mechanism, and the fix is to make
+the caller say it.
+
+**Measured, three instances in one session on stock, all the same shape:**
+
+| The default | What it silently decided |
+|---|---|
+| `def record_search_summary(..., status = TrainerStatus.COMPLETED)` | that a run had PASSED the cross-name honesty check. The method's own docstring says it "never touches `oos_fingerprint`" — the field that IS the verdict. One caller omitted the argument, and **7 runs reached `completed` with no verdict.** |
+| `def review_candidate(..., as_of = None)` → `utcnow()` | that a replay of March happened TODAY, silently un-fencing every point-in-time read in it. |
+| `co_evolve_g2: bool = False` | that the agent's self-critique would not improve — **in all 29 runs ever executed.** |
+
+The tell they share: **the gate that should have caught it was measuring
+something else.** For the verdict, 73 test suites asserted their way into
+`completed` through fixtures, so production and the fixtures agreed on the same
+untruth and nothing could see it.
+
+### How to apply
+
+- **A parameter whose value carries a claim takes no default.** "Verified",
+  "as of", "approved by", "priced at" — make it required and let the type checker
+  find every caller. That is the cheap half of the work, and it is the whole
+  control.
+- **Ask of any default you write: if every caller omits this forever, is that the
+  behaviour I intend?** If the honest answer is "somebody will pass the other
+  value", they will not — see the table.
+- **A default on a status/verdict field is the strongest form of the bug**,
+  because the value it writes is the one that stops anybody looking further.
+- **Pair it with a constraint the code cannot bypass.** stock added a code guard
+  in the single status-writer AND a database CHECK. Perturbation showed both bite,
+  and they catch different things: the code guard is a `WHERE` clause and is
+  structurally blind to an `INSERT`, which is exactly how the 7th bad row was
+  written.
+- **Never backfill the field to make the constraint pass.** Add the CHECK
+  `NOT VALID`. A synthesised verdict fabricates a passing grade on the very rows
+  that prove the check was skipped.
+
 ## A durable store is not built until it can be corrected
 
 **Any plan that adds a store an agent or a user writes to MUST state, before it
